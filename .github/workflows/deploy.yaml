@@ -1,0 +1,259 @@
+name: Build, push and deploy Starlink
+
+on:
+    push:
+        branches:
+            - main
+            - dev
+        paths:
+            - "backend/**"
+            - "frontend/**"
+            - ".github/workflows/deploy.yaml"
+            - "docker-compose.prod.yml"
+
+concurrency:
+    group: deploy-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    notify-build-start:
+        runs-on: ubuntu-latest
+        if: github.event_name == 'push'
+        steps:
+            - name: Notify Build Start
+              continue-on-error: true
+              uses: mattermost/action-mattermost-notify@master
+              with:
+                  MATTERMOST_WEBHOOK_URL: ${{ vars.MATTERMOST_WEBHOOK }}
+                  MATTERMOST_CHANNEL: ${{ vars.MATTERMOST_CHANNEL }}
+                  TEXT: |
+                      **Build Started**
+                      Repository: ${{ github.repository }}
+                      Branch: ${{ github.ref_name }}
+                      Commit: `${{ github.sha }}`
+                      Author: ${{ github.actor }}
+                      [View Pipeline](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+                  MATTERMOST_USERNAME: GitHub Actions
+                  MATTERMOST_ICON_URL: https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png
+
+    build-and-push:
+        runs-on: ubuntu-latest
+        needs: notify-build-start
+        timeout-minutes: 30
+        if: github.event_name == 'push'
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Configure insecure registry
+              run: |
+                  echo '{"insecure-registries": ["${{ vars.DOCKER_REGISTRY }}"]}' | sudo tee /etc/docker/daemon.json
+                  sudo systemctl restart docker
+
+            - name: Build & push backend image
+              env:
+                  DOCKER_IMAGE: ${{ vars.DOCKER_IMAGE_BACKEND }}
+                  SHA: ${{ github.sha }}
+                  BRANCH: ${{ github.ref_name }}
+              run: |
+                  echo "Building backend image -> $DOCKER_IMAGE"
+
+                  docker build \
+                    -t $DOCKER_IMAGE:$SHA \
+                    -f backend/Dockerfile ./backend
+
+                  docker push $DOCKER_IMAGE:$SHA
+
+                  docker tag $DOCKER_IMAGE:$SHA $DOCKER_IMAGE:$BRANCH-latest
+                  docker push $DOCKER_IMAGE:$BRANCH-latest
+
+            - name: Build & push frontend image
+              env:
+                  DOCKER_IMAGE: ${{ vars.DOCKER_IMAGE_FRONTEND }}
+                  SHA: ${{ github.sha }}
+                  BRANCH: ${{ github.ref_name }}
+              run: |
+                  echo "Building frontend image -> $DOCKER_IMAGE"
+
+                  docker build \
+                    -t $DOCKER_IMAGE:$SHA \
+                    -f frontend/Dockerfile ./frontend
+
+                  docker push $DOCKER_IMAGE:$SHA
+
+                  docker tag $DOCKER_IMAGE:$SHA $DOCKER_IMAGE:$BRANCH-latest
+                  docker push $DOCKER_IMAGE:$BRANCH-latest
+
+            - name: Notify Build Failure
+              if: failure()
+              continue-on-error: true
+              uses: mattermost/action-mattermost-notify@master
+              with:
+                  MATTERMOST_WEBHOOK_URL: ${{ vars.MATTERMOST_WEBHOOK }}
+                  MATTERMOST_CHANNEL: ${{ vars.MATTERMOST_CHANNEL }}
+                  TEXT: |
+                      **Build Failed**
+                      Repository: ${{ github.repository }}
+                      Branch: ${{ github.ref_name }}
+                      Commit: `${{ github.sha }}`
+                      Author: ${{ github.actor }}
+                      [View Pipeline](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+                  MATTERMOST_USERNAME: GitHub Actions
+                  MATTERMOST_ICON_URL: https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png
+
+    deploy:
+        needs: build-and-push
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        if: github.event_name == 'push'
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Notify Deployment Start
+              continue-on-error: true
+              uses: mattermost/action-mattermost-notify@master
+              with:
+                  MATTERMOST_WEBHOOK_URL: ${{ vars.MATTERMOST_WEBHOOK }}
+                  MATTERMOST_CHANNEL: ${{ vars.MATTERMOST_CHANNEL }}
+                  TEXT: |
+                      **Deployment Started**
+                      Repository: ${{ github.repository }}
+                      Branch: ${{ github.ref_name }}
+                      Commit: `${{ github.sha }}`
+                      Author: ${{ github.actor }}
+                      [View Pipeline](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+                  MATTERMOST_USERNAME: GitHub Actions
+                  MATTERMOST_ICON_URL: https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png
+
+            - name: Pull & restart via SSH
+              env:
+                  ROOT_DIR: ${{ vars.ROOT_DIR }}
+                  IMAGE_TAG: ${{ github.sha }}
+                  DOCKER_IMAGE_BACKEND: ${{ vars.DOCKER_IMAGE_BACKEND }}
+                  DOCKER_IMAGE_FRONTEND: ${{ vars.DOCKER_IMAGE_FRONTEND }}
+              uses: appleboy/ssh-action@v1
+              with:
+                  host: ${{ secrets.DEPLOY_HOST }}
+                  username: ${{ vars.DEPLOY_USER }}
+                  key: ${{ secrets.DEPLOY_SSH_KEY }}
+                  timeout: 900s
+                  command_timeout: 30m
+                  envs: ROOT_DIR,IMAGE_TAG,DOCKER_IMAGE_BACKEND,DOCKER_IMAGE_FRONTEND
+                  script: |
+                      echo "Deploying images with tag: $IMAGE_TAG"
+                      echo "Working in directory: $ROOT_DIR"
+
+                      cd $ROOT_DIR
+                      echo "Current directory: $(pwd)"
+
+                      # Ensure Docker trusts the private registry (HTTP)
+                      REGISTRY=$(echo "$DOCKER_IMAGE_BACKEND" | cut -d'/' -f1)
+                      if ! grep -q "$REGISTRY" /etc/docker/daemon.json 2>/dev/null; then
+                        echo "{\"insecure-registries\": [\"$REGISTRY\"]}" | sudo tee /etc/docker/daemon.json
+                        sudo systemctl restart docker
+                      fi
+
+                      # Pull latest code
+                      git pull origin ${{ github.ref_name }}
+
+                      # Set image tags for docker-compose and pull new images
+                      export IMAGE_TAG=$IMAGE_TAG
+                      export DOCKER_IMAGE_BACKEND=$DOCKER_IMAGE_BACKEND
+                      export DOCKER_IMAGE_FRONTEND=$DOCKER_IMAGE_FRONTEND
+                      docker compose -f docker-compose.prod.yml pull
+
+                      # Start services with new images
+                      docker compose -f docker-compose.prod.yml up -d --remove-orphans
+
+                      echo "Services restarted successfully with image tag: $IMAGE_TAG"
+
+            - name: Backend Health Check
+              uses: appleboy/ssh-action@v1
+              with:
+                  host: ${{ secrets.DEPLOY_HOST }}
+                  username: ${{ vars.DEPLOY_USER }}
+                  key: ${{ secrets.DEPLOY_SSH_KEY }}
+                  timeout: 300s
+                  script: |
+                      echo "Performing backend health check..."
+                      MAX_RETRIES=6
+                      RETRY_COUNT=0
+
+                      while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+                        if curl -f http://localhost:8030/health > /dev/null 2>&1; then
+                          echo "Backend health check passed"
+                          exit 0
+                        else
+                          echo "Health check failed, attempt $((RETRY_COUNT + 1))/$MAX_RETRIES"
+                          RETRY_COUNT=$((RETRY_COUNT + 1))
+                          sleep 10
+                        fi
+                      done
+
+                      echo "Backend failed health check after $MAX_RETRIES attempts"
+                      cd ${{ vars.ROOT_DIR }}
+                      docker compose -f docker-compose.prod.yml logs backend --tail=50
+                      exit 1
+
+            - name: Frontend Health Check
+              uses: appleboy/ssh-action@v1
+              with:
+                  host: ${{ secrets.DEPLOY_HOST }}
+                  username: ${{ vars.DEPLOY_USER }}
+                  key: ${{ secrets.DEPLOY_SSH_KEY }}
+                  timeout: 300s
+                  script: |
+                      echo "Performing frontend health check..."
+                      MAX_RETRIES=6
+                      RETRY_COUNT=0
+
+                      while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+                        if curl -f http://localhost:5173 > /dev/null 2>&1; then
+                          echo "Frontend health check passed"
+                          exit 0
+                        else
+                          echo "Health check failed, attempt $((RETRY_COUNT + 1))/$MAX_RETRIES"
+                          RETRY_COUNT=$((RETRY_COUNT + 1))
+                          sleep 10
+                        fi
+                      done
+
+                      echo "Frontend failed health check after $MAX_RETRIES attempts"
+                      cd ${{ vars.ROOT_DIR }}
+                      docker compose -f docker-compose.prod.yml logs frontend --tail=50
+                      exit 1
+
+            - name: Notify Deployment Success
+              if: success()
+              continue-on-error: true
+              uses: mattermost/action-mattermost-notify@master
+              with:
+                  MATTERMOST_WEBHOOK_URL: ${{ vars.MATTERMOST_WEBHOOK }}
+                  MATTERMOST_CHANNEL: ${{ vars.MATTERMOST_CHANNEL }}
+                  TEXT: |
+                      **Deployment Successful**
+                      Repository: ${{ github.repository }}
+                      Branch: ${{ github.ref_name }}
+                      Commit: `${{ github.sha }}`
+                      Author: ${{ github.actor }}
+                      Health Check: Passed
+                      [View Pipeline](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+                  MATTERMOST_USERNAME: GitHub Actions
+                  MATTERMOST_ICON_URL: https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png
+
+            - name: Notify Deployment Failure
+              if: failure()
+              continue-on-error: true
+              uses: mattermost/action-mattermost-notify@master
+              with:
+                  MATTERMOST_WEBHOOK_URL: ${{ vars.MATTERMOST_WEBHOOK }}
+                  MATTERMOST_CHANNEL: ${{ vars.MATTERMOST_CHANNEL }}
+                  TEXT: |
+                      **Deployment Failed**
+                      Repository: ${{ github.repository }}
+                      Branch: ${{ github.ref_name }}
+                      Commit: `${{ github.sha }}`
+                      Author: ${{ github.actor }}
+                      Status: Failed during deploy phase
+                      [View Pipeline](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+                  MATTERMOST_USERNAME: GitHub Actions
+                  MATTERMOST_ICON_URL: https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png

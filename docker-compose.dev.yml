@@ -1,0 +1,83 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: starlink
+      POSTGRES_PASSWORD: starlink
+      POSTGRES_DB: starlink
+    ports:
+      - "5437:5432"
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U starlink"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8030:8030"
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/alembic:/app/alembic
+      - ./backend/configs:/app/configs
+      - ./backend/data:/app/data
+      - ./backend/scripts:/app/scripts
+      - backend-venv:/app/.venv
+    env_file:
+      - ./backend/.env.docker
+    environment:
+      - ENV=development
+    depends_on:
+      postgres:
+        condition: service_healthy
+    develop:
+      watch:
+        # Sync source code changes
+        - action: sync
+          path: ./backend/src
+          target: /app/src
+        # Rebuild when dependencies change
+        - action: rebuild
+          path: ./backend/pyproject.toml
+        - action: rebuild
+          path: ./backend/uv.lock
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+      - ./frontend/tsconfig.json:/app/tsconfig.json
+      - ./frontend/tsconfig.app.json:/app/tsconfig.app.json
+      - ./frontend/tsconfig.node.json:/app/tsconfig.node.json
+      - frontend-modules:/app/node_modules
+    environment:
+      - VITE_API_URL=http://backend:8030
+    develop:
+      watch:
+        # Sync source code changes
+        - action: sync
+          path: ./frontend/src
+          target: /app/src
+        # Rebuild when dependencies change
+        - action: rebuild
+          path: ./frontend/package.json
+        - action: rebuild
+          path: ./frontend/package-lock.json
+
+volumes:
+  pgdata-dev:
+  backend-venv:
+  frontend-modules:

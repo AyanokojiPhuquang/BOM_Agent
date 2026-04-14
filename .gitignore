@@ -1,0 +1,61 @@
+# ---- Secrets / env ----
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# ---- Python / backend ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# SQLite (local dev / checkpoints)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Alembic – keep versions/, ignore cache
+backend/alembic/__pycache__/
+
+# ---- Runtime data (backend/data) ----
+backend/logs/
+backend/data/uploads/
+backend/data/generated_boms/
+backend/data/managed_files/
+backend/data/checkpoints.db*
+# Datasheets catalog is provisioned per-environment, don't commit it
+backend/data/datasheets/
+
+# ---- Frontend ----
+node_modules/
+frontend/dist/
+frontend/dist-ssr/
+*.local
+
+# ---- Editors / OS ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+*.sw?
+
+# ---- Tooling caches ----
+.playwright-mcp/
+.claude/
