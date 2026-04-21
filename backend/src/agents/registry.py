@@ -2,8 +2,6 @@
 
 Central definition of each agent type — its prompt, model,
 and the custom tools it is allowed to use.
-Built-in DeepAgent tools (grep, glob, read_file, ls) are provided
-automatically by the filesystem backend.
 """
 
 from dataclasses import dataclass, field
@@ -11,6 +9,7 @@ from dataclasses import dataclass, field
 from src.agents.tools.escalate_to_human import escalate_to_human
 from src.agents.tools.generate_bom import generate_bom
 from src.agents.tools.inventory_checker import check_product_inventory
+from src.agents.tools.product_search import search_products, get_product_detail
 
 
 @dataclass(frozen=True)
@@ -31,7 +30,7 @@ AGENT_REGISTRY: dict[str, AgentDefinition] = {
     "bom_assistant": AgentDefinition(
         prompt="agents.bom_assistant",
         model="agents/bom_assistant/default",
-        tools=[generate_bom, escalate_to_human, check_product_inventory],
+        tools=[search_products, get_product_detail, generate_bom, escalate_to_human, check_product_inventory],
     ),
 }
 

@@ -1,184 +1,134 @@
-"""Excel renderer for BOM output.
+"""Excel renderer for quotation output.
 
-Converts a GenerateBomOutput into a styled .xlsx workbook.
+Uses the MVC template (bảngBaoGia.xlsx) and fills in customer info + product rows.
+Keeps all 13 original columns (A-M). Discount columns (J, K, L) are left empty.
 """
 
+import io
 from datetime import datetime
 from pathlib import Path
 
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.worksheet import Worksheet
+import httpx
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment, Border, Font, Side
+from loguru import logger
 
-from src.agents.tools.schemas import GenerateBomOutput, ProductInventoryStatus, STATUS_LABELS
+from src.agents.tools.schemas import GenerateBomOutput, ProductInventoryStatus
 
-# Styling constants
-_HEADER_FONT = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
-_HEADER_FILL = PatternFill(start_color="2F5496", end_color="2F5496", fill_type="solid")
-_HEADER_ALIGNMENT = Alignment(horizontal="center", vertical="center", wrap_text=True)
-_TITLE_FONT = Font(name="Calibri", bold=True, size=14, color="2F5496")
-_SUBTITLE_FONT = Font(name="Calibri", size=10, color="666666")
-_CELL_BORDER = Border(
-    left=Side(style="thin", color="D9D9D9"),
-    right=Side(style="thin", color="D9D9D9"),
-    top=Side(style="thin", color="D9D9D9"),
-    bottom=Side(style="thin", color="D9D9D9"),
+_TEMPLATE_PATH = Path("data/bảngBaoGia.xlsx")
+_DATA_START_ROW = 12
+_TEMPLATE_DATA_ROWS = 3   # rows 12, 13, 14
+_TEMPLATE_TOTALS_ROW = 15  # row 15
+
+_CELL_FONT = Font(name="Times New Roman", size=11)
+_CELL_ALIGN = Alignment(horizontal="center", vertical="center", wrap_text=True)
+_CELL_ALIGN_LEFT = Alignment(horizontal="left", vertical="top", wrap_text=True)
+_THIN_BORDER = Border(
+    left=Side(style="thin"), right=Side(style="thin"),
+    top=Side(style="thin"), bottom=Side(style="thin"),
 )
-_ALT_ROW_FILL = PatternFill(start_color="F2F7FC", end_color="F2F7FC", fill_type="solid")
-
-_IN_STOCK_FILL = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
-_PARTIAL_FILL = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
-_OUT_OF_STOCK_FILL = PatternFill(start_color="FCE4EC", end_color="FCE4EC", fill_type="solid")
-
-_STATUS_FILLS = {
-    "in_stock": _IN_STOCK_FILL,
-    "partial": _PARTIAL_FILL,
-    "out_of_stock": _OUT_OF_STOCK_FILL,
-}
-
-# BOM sheet columns
-_BOM_COLUMNS = [
-    ("#", 5),
-    ("SKU", 22),
-    ("Brand", 12),
-    ("Description", 35),
-    ("Vendor", 14),
-    ("Data Rate", 10),
-    ("Fiber", 13),
-    ("Wavelength", 12),
-    ("Distance", 10),
-    ("Connector", 10),
-    ("Qty", 6),
-    ("Unit Price", 12),
-    ("Notes", 30),
-]
-
-_INV_COLUMNS = [
-    ("Requested", 10),
-    ("Available", 10),
-    ("In Stock", 10),
-    ("Status", 16),
-]
 
 
-def _resolve_columns(has_inventory: bool) -> list[tuple[str, int]]:
-    """Return the full column list based on whether inventory data is present."""
-    columns = list(_BOM_COLUMNS)
-    if has_inventory:
-        columns.extend(_INV_COLUMNS)
-    return columns
+def _style(cell, align=None):
+    cell.font = _CELL_FONT
+    cell.alignment = align or _CELL_ALIGN
+    cell.border = _THIN_BORDER
 
 
-def _write_title_rows(ws: Worksheet, bom: GenerateBomOutput, last_col: str) -> None:
-    """Write the title and subtitle rows."""
-    ws.merge_cells(f"A1:{last_col}1")
-    title_cell = ws["A1"]
-    title_cell.value = f"BOM — {bom.customer_name}"
-    title_cell.font = _TITLE_FONT
-    title_cell.alignment = Alignment(vertical="center")
-    ws.row_dimensions[1].height = 30
-
-    subtitle_parts = ["Starlinks"]
-    if bom.customer_phone:
-        subtitle_parts.append(f"SĐT: {bom.customer_phone}")
-    subtitle_parts.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    ws.merge_cells(f"A2:{last_col}2")
-    subtitle_cell = ws["A2"]
-    subtitle_cell.value = " | ".join(subtitle_parts)
-    subtitle_cell.font = _SUBTITLE_FONT
-
-
-def _write_header_row(ws: Worksheet, columns: list[tuple[str, int]], row: int) -> None:
-    """Write the styled header row."""
-    for col_idx, (col_name, col_width) in enumerate(columns, start=1):
-        cell = ws.cell(row=row, column=col_idx, value=col_name)
-        cell.font = _HEADER_FONT
-        cell.fill = _HEADER_FILL
-        cell.alignment = _HEADER_ALIGNMENT
-        cell.border = _CELL_BORDER
-        ws.column_dimensions[get_column_letter(col_idx)].width = col_width
+def _download_image(url: str) -> bytes | None:
+    """Download image and convert to PNG bytes for Excel embedding."""
+    if not url or not url.startswith("http"):
+        return None
+    try:
+        with httpx.Client(timeout=10, follow_redirects=True) as client:
+            resp = client.get(url)
+            if resp.status_code != 200 or len(resp.content) > 500_000:
+                return None
+        from PIL import Image
+        pil_img = Image.open(io.BytesIO(resp.content))
+        buf = io.BytesIO()
+        pil_img.save(buf, format="PNG")
+        buf.seek(0)
+        return buf.getvalue()
+    except Exception as e:
+        logger.debug(f"Image download/convert failed ({url}): {e}")
+    return None
 
 
-def _line_item_values(item) -> list:
-    """Extract cell values from a BomLineItem."""
-    return [
-        item.line,
-        item.sku,
-        item.brand,
-        item.description,
-        item.vendor_compatibility,
-        item.data_rate,
-        item.fiber_type,
-        item.wavelength or "",
-        item.max_distance,
-        item.connector,
-        item.quantity,
-        f"${item.unit_price_usd:.2f}" if item.unit_price_usd else "",
-        item.notes or "",
-    ]
+def _unmerge_from_row(ws, from_row: int):
+    """Unmerge all merged cell ranges touching from_row or below."""
+    to_remove = [m for m in ws.merged_cells.ranges if m.max_row >= from_row]
+    for m in to_remove:
+        ws.unmerge_cells(str(m))
 
 
-def _inventory_values(inv: ProductInventoryStatus | None) -> list:
-    """Extract cell values from a ProductInventoryStatus."""
-    if not inv:
-        return ["", "", "", ""]
-    return [
-        inv.quantity_requested,
-        inv.available,
-        inv.remain,
-        STATUS_LABELS.get(inv.status_label, inv.status_label),
-    ]
+def _clear_row(ws, row: int, max_col: int = 13):
+    """Clear all cell values in a row."""
+    for col in range(1, max_col + 1):
+        ws.cell(row=row, column=col).value = None
 
 
-def _write_data_rows(
-    ws: Worksheet,
-    bom: GenerateBomOutput,
-    header_row: int,
-    total_cols: int,
-    inventory_statuses: list[ProductInventoryStatus] | None,
-) -> None:
-    """Write BOM line item rows with optional inventory columns."""
-    has_inventory = bool(inventory_statuses)
+def _write_product_row(ws, row: int, idx: int, item) -> float:
+    """Write one product row. Returns line total."""
+    _style(ws.cell(row=row, column=1, value=idx + 1))
+    _style(ws.cell(row=row, column=2, value=item.product_code))
 
-    for row_idx, item in enumerate(bom.line_items, start=header_row + 1):
-        values = _line_item_values(item)
+    name = item.product_name
+    if item.product_code and item.product_code in name:
+        name = name.replace(item.product_code, "").strip().strip("-").strip()
+    _style(ws.cell(row=row, column=3, value=name), _CELL_ALIGN_LEFT)
 
-        if has_inventory:
-            item_idx = row_idx - header_row - 1
-            inv = inventory_statuses[item_idx] if item_idx < len(inventory_statuses) else None
-            values.extend(_inventory_values(inv))
+    # D: Image
+    ws.cell(row=row, column=4).border = _THIN_BORDER
+    img_data = _download_image(item.image_url)
+    if img_data:
+        try:
+            from openpyxl.drawing.image import Image as XlImage
+            from openpyxl.utils.units import pixels_to_EMU
+            from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
 
-        for col_idx, value in enumerate(values, start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
-            cell.border = _CELL_BORDER
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
-            if (row_idx - header_row) % 2 == 0:
-                cell.fill = _ALT_ROW_FILL
+            img = XlImage(io.BytesIO(img_data))
+            img_size = 120  # pixels
+            img.width = img_size
+            img.height = img_size
 
-        # Color-code inventory status cell
-        if has_inventory and item_idx < len(inventory_statuses):
-            inv = inventory_statuses[item_idx]
-            fill = _STATUS_FILLS.get(inv.status_label)
-            if fill:
-                ws.cell(row=row_idx, column=total_cols).fill = fill
+            # Center image in cell D using TwoCellAnchor with offsets
+            # Col D index = 3 (0-based), row index = row-1 (0-based)
+            col_width_px = 290  # col D ~38 chars ≈ 290px
+            row_height_px = max(65, (len(item.description or "") // 35 + 1) * 13)
+            x_offset = max(0, (col_width_px - img_size) // 2)
+            y_offset = max(0, (row_height_px - img_size) // 2)
 
+            marker = AnchorMarker(col=3, colOff=pixels_to_EMU(x_offset), row=row - 1, rowOff=pixels_to_EMU(y_offset))
+            marker2 = AnchorMarker(col=3, colOff=pixels_to_EMU(x_offset + img_size), row=row - 1, rowOff=pixels_to_EMU(y_offset + img_size))
+            img.anchor = TwoCellAnchor(_from=marker, to=marker2)
 
-def _write_assumptions(
-    ws: Worksheet,
-    assumptions: list[str],
-    start_row: int,
-    last_col: str,
-) -> None:
-    """Write the assumptions section below the data rows."""
-    ws.merge_cells(f"A{start_row}:{last_col}{start_row}")
-    header = ws.cell(row=start_row, column=1, value="Assumptions")
-    header.font = Font(name="Calibri", bold=True, size=11, color="2F5496")
+            ws.add_image(img)
+        except Exception as e:
+            logger.warning(f"Image embed failed for {item.product_code}: {e}")
 
-    for i, assumption in enumerate(assumptions):
-        row = start_row + 1 + i
-        ws.merge_cells(f"A{row}:{last_col}{row}")
-        ws.cell(row=row, column=1, value=f"• {assumption}")
+    _style(ws.cell(row=row, column=5, value=item.category))
+    _style(ws.cell(row=row, column=6, value=item.description), _CELL_ALIGN_LEFT)
+    _style(ws.cell(row=row, column=7, value=item.quantity))
+    _style(ws.cell(row=row, column=8, value=item.unit or "cái"))
+
+    c = ws.cell(row=row, column=9, value=item.unit_price)
+    _style(c)
+    c.number_format = '#,##0'
+
+    # J, K, L: discount cols — empty with border
+    for col in (10, 11, 12):
+        ws.cell(row=row, column=col).border = _THIN_BORDER
+
+    _style(ws.cell(row=row, column=13, value=item.notes or ""), _CELL_ALIGN_LEFT)
+
+    # Row height: calculate based on description text wrapping in col F
+    desc_text = item.description or ""
+    chars_per_line = 35
+    num_lines = max(1, len(desc_text) // chars_per_line + desc_text.count('\n') + 1)
+    ws.row_dimensions[row].height = max(65, num_lines * 13)
+
+    return item.unit_price * item.quantity
 
 
 def render_bom_excel(
@@ -186,40 +136,77 @@ def render_bom_excel(
     output_dir: Path,
     inventory_statuses: list[ProductInventoryStatus] | None = None,
 ) -> Path:
-    """Render a BOM to an Excel workbook.
-
-    Args:
-        bom: The structured BOM output from the subagent.
-        output_dir: Directory to save the file in.
-        inventory_statuses: Optional real-time inventory data per product.
-
-    Returns:
-        Path to the generated .xlsx file.
-    """
     output_dir.mkdir(parents=True, exist_ok=True)
-
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     slug = bom.customer_name.lower().replace(" ", "_")[:30]
     filepath = output_dir / f"{timestamp}_{slug}.xlsx"
 
-    has_inventory = bool(inventory_statuses)
-    columns = _resolve_columns(has_inventory)
-    total_cols = len(columns)
-    last_col = get_column_letter(total_cols)
+    if not _TEMPLATE_PATH.exists():
+        raise FileNotFoundError(f"Template not found: {_TEMPLATE_PATH}")
 
-    wb = Workbook()
+    wb = load_workbook(str(_TEMPLATE_PATH))
     ws = wb.active
-    ws.title = "BOM"
+    num_items = len(bom.line_items)
 
-    header_row = 4
+    # Unmerge all from row 12 down (data + totals area)
+    _unmerge_from_row(ws, _DATA_START_ROW)
 
-    _write_title_rows(ws, bom, last_col)
-    _write_header_row(ws, columns, header_row)
-    _write_data_rows(ws, bom, header_row, total_cols, inventory_statuses)
+    # Adjust rows: template has 3 data rows (12-14) + 1 totals row (15)
+    # We need exactly num_items data rows + 1 totals row
+    if num_items > _TEMPLATE_DATA_ROWS:
+        # Insert extra rows BEFORE the totals row
+        extra = num_items - _TEMPLATE_DATA_ROWS
+        ws.insert_rows(_DATA_START_ROW + _TEMPLATE_DATA_ROWS, extra)
+    elif num_items < _TEMPLATE_DATA_ROWS:
+        # Delete unused placeholder rows
+        rows_to_del = _TEMPLATE_DATA_ROWS - num_items
+        ws.delete_rows(_DATA_START_ROW + num_items, rows_to_del)
 
-    if bom.assumptions:
-        assumptions_start = header_row + len(bom.line_items) + 2
-        _write_assumptions(ws, bom.assumptions, assumptions_start, last_col)
+    # Fill customer info
+    now = datetime.now()
+    ws["M1"] = now.strftime("%d-%m-%Y")
+    ws["M2"] = f"BG{now.strftime('%y%m%d%H%M')}"
+    ws["M3"] = f"NGÀY {now.day} THÁNG {now.month:02d} NĂM {now.year}"
+    ws["C6"] = f"Ông/Bà: {bom.customer_name}"
+    ws["C7"] = f"Email: {bom.customer_email}" if bom.customer_email else "Email:"
+    ws["C8"] = f"Điện thoại: {bom.customer_phone}" if bom.customer_phone else "Điện thoại:"
+    ws["C9"] = f"Địa chỉ: {bom.customer_address}" if bom.customer_address else "Địa chỉ:"
+
+    # Write product rows
+    grand_total = 0
+    for idx, item in enumerate(bom.line_items):
+        row = _DATA_START_ROW + idx
+        _clear_row(ws, row)
+        grand_total += _write_product_row(ws, row, idx, item)
+
+    # Write totals row (right after last data row)
+    totals_row = _DATA_START_ROW + num_items
+    _clear_row(ws, totals_row)
+
+    ws.merge_cells(start_row=totals_row, start_column=1, end_row=totals_row, end_column=8)
+    lbl = ws.cell(row=totals_row, column=1, value="TỔNG GIÁ TRỊ ĐƠN HÀNG")
+    lbl.font = Font(name="Times New Roman", size=11, bold=True)
+    lbl.alignment = Alignment(horizontal="center", vertical="center")
+    lbl.border = _THIN_BORDER
+
+    tc = ws.cell(row=totals_row, column=9, value=grand_total)
+    tc.font = Font(name="Times New Roman", size=11, bold=True)
+    tc.alignment = _CELL_ALIGN
+    tc.border = _THIN_BORDER
+    tc.number_format = '#,##0'
+
+    for col in range(10, 14):
+        ws.cell(row=totals_row, column=col).border = _THIN_BORDER
+
+    ws.row_dimensions[totals_row].height = 50
+
+    # Style the Lưu ý/Note section below totals
+    _NOTE_FONT = Font(name="Times New Roman", size=11, bold=True, italic=True)
+    for r in range(totals_row + 1, ws.max_row + 1):
+        for col in range(1, 14):
+            cell = ws.cell(row=r, column=col)
+            if cell.value is not None:
+                cell.font = _NOTE_FONT
 
     wb.save(filepath)
     return filepath

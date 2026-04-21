@@ -2,11 +2,11 @@
 // Application-wide constants
 // ---------------------------------------------------------------------------
 
-export const APP_NAME = 'Starlink Chat';
-export const AI_NAME = 'Starlink AI';
+export const APP_NAME = 'MVC Chat';
+export const AI_NAME = 'MVC AI';
 export const AI_DISCLAIMER =
-  'Starlink AI may produce inaccurate information. Verify important facts.';
-export const WELCOME_HEADING = 'Welcome to Starlink Chat';
+  'MVC AI may produce inaccurate information. Verify important facts.';
+export const WELCOME_HEADING = 'Welcome to MVC Chat';
 
 export const Z_INDEX = {
   SIDEBAR_OVERLAY: 20,

@@ -5,7 +5,7 @@ models:
     agents/bom_assistant/default:
         model_type: "langchain"
         primary:
-            model: "openai/gpt-5.4-mini"
+            model: "openai/gpt-4.1-mini"
             <<: *default_params
 
     agents/bom_generator/default:

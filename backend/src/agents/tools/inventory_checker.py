@@ -102,7 +102,11 @@ def _build_status(
 
 
 async def check_inventory(codes: list[str], quantities: list[int]) -> list[ProductInventoryStatus]:
-    """Check real-time inventory for each product code. Never raises."""
+    """Check real-time inventory for each product code. Never raises.
+
+    Tries Nhanh API first; falls back to local DB stock data if the API
+    is unavailable (e.g. no token, network error).
+    """
     try:
         async with get_manual_db_session() as session:
             product_repo = NhanhProductRepository(session)
@@ -113,6 +117,14 @@ async def check_inventory(codes: list[str], quantities: list[int]) -> list[Produ
 
             nhanh_ids = [p.nhanh_id for p in nhanh_by_code.values()]
             inventory, api_error = await _fetch_inventory(nhanh_service, nhanh_ids)
+
+            # Fallback: if API failed, use local DB remain/available
+            if api_error and not inventory:
+                inventory = {
+                    p.nhanh_id: (p.available, p.remain)
+                    for p in nhanh_by_code.values()
+                }
+                api_error = None  # Clear error since we have local data
 
             return [
                 _build_status(

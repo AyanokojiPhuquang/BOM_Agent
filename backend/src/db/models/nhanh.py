@@ -60,6 +60,11 @@ class NhanhProduct(SQLModel, table=True):
     remain: int = 0
     available: int = 0
     image: str = ""
+    description: str = ""
+    unit: str = ""
+    sell_price: float = 0
+    brand_name: str = ""
+    category_name: str = ""
     datasheet_path: str | None = Field(default=None, description="Matched datasheet file path relative to datasheets root")
     last_synced_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),

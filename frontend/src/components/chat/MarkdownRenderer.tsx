@@ -32,6 +32,18 @@ function fixImageUrls(markdown: string): string {
   );
 }
 
+/**
+ * Strip sandbox: prefix from all markdown link URLs.
+ * LLMs sometimes emit links like [text](sandbox:/path) which browsers
+ * treat as an unknown protocol and resolve to the current page.
+ */
+function fixSandboxUrls(markdown: string): string {
+  return markdown.replace(
+    /\]\(sandbox:/g,
+    '](',
+  );
+}
+
 interface MarkdownRendererProps {
   content: string;
 }
@@ -103,16 +115,34 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
               />
             );
           }
-          // Render .xlsx links as download buttons
-          if (href && /\.xlsx$/i.test(href)) {
+          // Render file download links (xlsx, or anything under /api/files/boms/) as download buttons
+          if (href && (/\.xlsx$/i.test(href) || href.includes('/api/files/boms/'))) {
+            const handleDownload = (e: React.MouseEvent) => {
+              e.preventDefault();
+              e.stopPropagation();
+              fetch(href)
+                .then(res => res.blob())
+                .then(blob => {
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = decodeURIComponent(href.split('/').pop() || 'download.xlsx');
+                  a.style.display = 'none';
+                  document.body.appendChild(a);
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  document.body.removeChild(a);
+                })
+                .catch(err => console.error('Download failed:', err));
+            };
             return (
-              <a
-                href={href}
-                download
-                className="inline-block px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors no-underline"
+              <button
+                type="button"
+                onClick={handleDownload}
+                className="inline-block px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors cursor-pointer"
               >
-                {children}
-              </a>
+                📥 {children}
+              </button>
             );
           }
           return (
@@ -123,7 +153,7 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
         },
       }}
     >
-      {fixImageUrls(content)}
+      {fixSandboxUrls(fixImageUrls(content))}
     </ReactMarkdown>
     </div>
   );

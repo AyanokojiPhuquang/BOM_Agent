@@ -1,23 +1,19 @@
-"""BOM assistant agent for Starlinks.
+"""Sales assistant agent for MVC & CO.
 
-Uses a read-only agent with filesystem tools (grep/glob/read_file/ls)
-to search optical transceiver datasheets, plus generate_bom.
+Uses custom tools (search_products, get_product_detail, generate_bom, etc.)
+to help customers find products and generate quotations.
 """
 
 from collections.abc import AsyncGenerator
-from pathlib import Path
 from typing import Any
 
-from deepagents.backends import FilesystemBackend
 from deepagents.graph import BASE_AGENT_PROMPT
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
-from deepagents.middleware.summarization import create_summarization_middleware
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
 from langfuse import observe
 from loguru import logger
 
-from src.agents.middleware import ReadOnlyFilesystemMiddleware
 from src.agents.registry import get_agent_definition, get_all_tools
 from src.agents.schemas.context import BomAssistantContext
 from src.agents.streaming import StreamEvent
@@ -35,10 +31,7 @@ from src.services.prompts.service import get_prompt_service
 
 
 def _build_agent(context: BomAssistantContext, checkpointer=None):
-    """Build a read-only agent with filesystem access to product datasheets.
-
-    Only exposes read tools (grep, glob, read_file, ls) and generate_bom.
-    Write/edit/execute tools are excluded.
+    """Build the sales assistant agent with DB-backed product tools.
 
     Args:
         context: BomAssistantContext with session metadata
@@ -55,16 +48,7 @@ def _build_agent(context: BomAssistantContext, checkpointer=None):
     system_prompt = prompt_service.get_prompt(defn.prompt, use_local_only=True)
     final_system_prompt = system_prompt + "\n\n" + BASE_AGENT_PROMPT
 
-    # Datasheets accessible via read-only grep/glob/read_file/ls
-    datasheets_path = str(Path(SETTINGS.datasheets_dir).resolve())
-    backend = FilesystemBackend(
-        root_dir=datasheets_path,
-        virtual_mode=True,
-    )
-
     middleware = [
-        ReadOnlyFilesystemMiddleware(backend=backend),
-        create_summarization_middleware(model, backend),
         PatchToolCallsMiddleware(),
     ]
 

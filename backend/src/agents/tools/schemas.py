@@ -1,4 +1,4 @@
-"""Pydantic schemas for BOM generation tool.
+"""Pydantic schemas for BOM/quotation generation tool.
 
 Defines the input/output contracts for the generate_bom tool
 and its internal LLM subagent.
@@ -16,15 +16,13 @@ from pydantic import BaseModel, Field
 
 
 class BomProductItem(BaseModel):
-    """A single product item for BOM generation."""
+    """A single product item for quotation generation."""
 
     product_code: str = Field(
-        description="Product code/part number, e.g. SFP-10G-ER, SFP-10G-ZR-I.",
+        description="Product code, e.g. MS885DT2XW, TLG04301V.",
     )
     quantity: int = Field(default=1, description="Number of units needed")
-    vendor: str = Field(description="Target vendor for coding, e.g. Cisco, Juniper, Fortinet, HPE, Dell")
-    device_model: str | None = Field(default=None, description="Device model, e.g. Catalyst 9300")
-    notes: str | None = Field(default=None, description="Additional notes or constraints")
+    notes: str | None = Field(default=None, description="Additional notes")
 
 
 class GenerateBomInput(BaseModel):
@@ -32,7 +30,9 @@ class GenerateBomInput(BaseModel):
 
     customer_name: str = Field(description="Customer or company name")
     customer_phone: str = Field(description="Customer phone number")
-    items: list[BomProductItem] = Field(description="List of products to include in the BOM")
+    customer_email: str = Field(default="", description="Customer email")
+    customer_address: str = Field(default="", description="Customer address")
+    items: list[BomProductItem] = Field(description="List of products to include")
 
 
 # --- Subagent Output Schemas ---
@@ -43,37 +43,41 @@ class BomValidationIssue(BaseModel):
 
     field: str = Field(description="The requirement field with an issue")
     message: str = Field(description="Description of the issue")
-    severity: Literal["warning", "error"] = Field(description="error = cannot proceed; warning = assumed a default")
+    severity: Literal["warning", "error"] = Field(
+        description="error = cannot proceed; warning = assumed a default"
+    )
 
 
 class BomLineItem(BaseModel):
-    """One line in the generated BOM."""
+    """One line in the generated quotation."""
 
     line: int = Field(description="Line item number, starting from 1")
-    sku: str = Field(description="Starview or ModuleTek part number")
-    brand: str = Field(description="Product brand: Starview or ModuleTek")
-    description: str = Field(description="Product description")
-    vendor_compatibility: str = Field(description="Target vendor this transceiver is coded for")
-    data_rate: str = Field(description="Data rate, e.g. 10G")
-    fiber_type: str = Field(description="single-mode or multi-mode")
-    wavelength: str | None = Field(default=None, description="Wavelength, e.g. 850nm, 1310nm")
-    max_distance: str = Field(description="Maximum transmission distance")
-    connector: str = Field(description="Connector type")
+    product_code: str = Field(description="Product code")
+    product_name: str = Field(description="Product name")
+    image_url: str = Field(default="", description="Product image URL")
+    category: str = Field(default="", description="Product category")
+    description: str = Field(default="", description="Function/size description")
     quantity: int = Field(description="Number of units")
-    unit_price_usd: float | None = Field(default=None, description="Unit price in USD, if available")
-    notes: str | None = Field(default=None, description="Compatibility notes or caveats")
+    unit: str = Field(default="cái", description="Unit of measure")
+    unit_price: float = Field(default=0, description="Unit price (VND, VAT included)")
+    discount_percent: float = Field(default=0, description="Discount percentage")
+    notes: str | None = Field(default=None, description="Notes")
 
 
 class GenerateBomOutput(BaseModel):
-    """Full structured BOM output from the subagent."""
+    """Full structured quotation output from the subagent."""
 
-    is_valid: bool = Field(description="False if critical information is missing to generate a BOM")
+    is_valid: bool = Field(description="False if critical information is missing")
     validation_issues: list[BomValidationIssue] = Field(default_factory=list)
     customer_name: str = Field(description="Customer or company name")
     customer_phone: str = Field(default="", description="Customer phone number")
+    customer_email: str = Field(default="", description="Customer email")
+    customer_address: str = Field(default="", description="Customer address")
     line_items: list[BomLineItem] = Field(default_factory=list)
-    assumptions: list[str] = Field(default_factory=list, description="Assumptions made when info was missing")
-    summary: str = Field(description="Human-readable summary of the BOM")
+    assumptions: list[str] = Field(
+        default_factory=list, description="Assumptions made when info was missing"
+    )
+    summary: str = Field(description="Human-readable summary")
 
 
 # --- Inventory Tool Input Schema ---
@@ -83,8 +87,7 @@ class CheckInventoryInput(BaseModel):
     """Input schema for the check_inventory tool."""
 
     product_code: str = Field(
-        description="Product code, e.g. SFP-10G-ER, SFP-10G-ZR-I. "
-        "This is the product model/part number.",
+        description="Product code, e.g. MS885DT2XW, TLG04301V.",
     )
     quantity: int = Field(default=1, description="Number of units to check availability for")
 
@@ -93,20 +96,20 @@ class CheckInventoryInput(BaseModel):
 
 
 class ProductInventoryStatus(BaseModel):
-    """Real-time inventory status for a BOM line item."""
+    """Real-time inventory status for a product."""
 
     product_code: str = Field(description="Product code")
-    nhanh_product_name: str | None = Field(default=None, description="Product name in Nhanh")
+    nhanh_product_name: str | None = Field(default=None, description="Product name")
     nhanh_id: int | None = Field(default=None, description="Nhanh product ID")
-    quantity_requested: int = Field(description="Quantity requested in BOM")
-    available: int = Field(default=0, description="Available stock from Nhanh API")
-    remain: int = Field(default=0, description="Total remaining stock from Nhanh API")
+    quantity_requested: int = Field(description="Quantity requested")
+    available: int = Field(default=0, description="Available stock")
+    remain: int = Field(default=0, description="Total remaining stock")
     is_sufficient: bool = Field(default=False, description="True if available >= quantity_requested")
     status_label: str = Field(
         default="no_data",
         description="in_stock | partial | out_of_stock | no_data | error",
     )
-    error_message: str | None = Field(default=None, description="Error details when status is 'error'")
+    error_message: str | None = Field(default=None, description="Error details")
 
 
 # --- Escalation Schemas ---
@@ -126,19 +129,17 @@ class EscalationCategory(str, Enum):
 class EscalateInput(BaseModel):
     """Input schema for the escalate_to_human tool."""
 
-    reason: str = Field(description="Brief explanation of why this conversation is being escalated")
+    reason: str = Field(description="Brief explanation of why escalating")
     category: EscalationCategory = Field(description="Escalation category")
-    conversation_summary: str = Field(description="Summary of the conversation so far, including what the customer needs")
+    conversation_summary: str = Field(description="Summary of the conversation")
 
 
 # --- Shared constants ---
 
 STATUS_LABELS: dict[str, str] = {
-    "in_stock": "In Stock",
-    "partial": "Partial",
-    "out_of_stock": "Out of Stock",
-    "no_data": "No Data",
-    "error": "Error",
+    "in_stock": "Còn hàng",
+    "partial": "Không đủ",
+    "out_of_stock": "Hết hàng",
+    "no_data": "Chưa có dữ liệu",
+    "error": "Lỗi",
 }
-
-
