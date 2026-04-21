@@ -73,6 +73,7 @@ async def lifespan(app: FastAPI):
 Path("data/generated_boms").mkdir(parents=True, exist_ok=True)
 Path("data/uploads").mkdir(parents=True, exist_ok=True)
 Path("data/managed_files").mkdir(parents=True, exist_ok=True)
+Path("data/datasheets").mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Starlink Backend", version="0.1.0", lifespan=lifespan)
 
