@@ -25,6 +25,7 @@ services:
     volumes:
       - ./backend/src:/app/src
       - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini
       - ./backend/configs:/app/configs
       - ./backend/data:/app/data
       - ./backend/scripts:/app/scripts

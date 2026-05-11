@@ -28,7 +28,6 @@ class FallbackOpenAIModel:
                 parsed.append((model.model, model.get_params()))
         return parsed
 
-    @observe(name="completion")
     def completion(self, *args, **kwargs):
         exceptions: list[Exception] = []
         for model_name, default_params in self.models:

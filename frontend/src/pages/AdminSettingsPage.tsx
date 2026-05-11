@@ -3,11 +3,13 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { cn } from '@/utils/cn';
 import { BackArrowIcon, UsersIcon, FolderOutlineIcon, CollapseIcon } from '@/components/icons';
 import { UserManagementContent } from '@/pages/UserManagementPage';
-import { FileManagementContent } from '@/pages/FileManagementPage';
+import { DatasheetsContent } from '@/pages/DatasheetsPage';
+import { BomsContent } from '@/pages/BomsPage';
 
 const TABS = [
   { key: 'users', label: 'Users', icon: <UsersIcon /> },
-  { key: 'files', label: 'Files', icon: <FolderOutlineIcon /> },
+  { key: 'datasheets', label: 'Datasheets', icon: <FolderOutlineIcon /> },
+  { key: 'boms', label: 'BOMs', icon: <FolderOutlineIcon /> },
 ] as const;
 
 type TabKey = (typeof TABS)[number]['key'];
@@ -75,7 +77,8 @@ export function AdminSettingsPage() {
         {/* Content */}
         <div className="flex-1 overflow-auto">
           {activeTab === 'users' && <UserManagementContent />}
-          {activeTab === 'files' && <FileManagementContent />}
+          {activeTab === 'datasheets' && <DatasheetsContent />}
+          {activeTab === 'boms' && <BomsContent />}
         </div>
       </div>
     </div>

@@ -54,7 +54,13 @@ def _build_run_config(session_id: str = "", thread_id: str = "") -> dict:
         session_id: Used for Langfuse tracing session. Falls back as thread_id if thread_id not set.
         thread_id: Used for LangGraph checkpointer thread. Typically the conversation_id.
     """
-    config: dict[str, Any] = {"callbacks": [CallbackHandler()]}
+    from src.configs import SETTINGS
+
+    callbacks = []
+    if SETTINGS.langfuse_public_key and SETTINGS.langfuse_secret_key:
+        callbacks.append(CallbackHandler())
+
+    config: dict[str, Any] = {"callbacks": callbacks}
     effective_thread_id = thread_id or session_id
     if effective_thread_id:
         config.setdefault("configurable", {})["thread_id"] = effective_thread_id
@@ -134,6 +140,12 @@ async def stream_agent_events(
 AGENT_NAME = "bom-assistant-agent"
 
 
+def _langfuse_enabled() -> bool:
+    """Check if Langfuse is configured."""
+    from src.configs import SETTINGS
+    return bool(SETTINGS.langfuse_public_key and SETTINGS.langfuse_secret_key and SETTINGS.langfuse_base_url)
+
+
 def setup_invoke_trace(
     *,
     session_id: str,
@@ -141,6 +153,8 @@ def setup_invoke_trace(
     input_data: dict,
 ) -> None:
     """Set up Langfuse trace for a non-streaming invocation."""
+    if not _langfuse_enabled():
+        return
     langfuse = get_client()
     langfuse.update_current_trace(
         name=AGENT_NAME,
@@ -152,6 +166,8 @@ def setup_invoke_trace(
 
 def finalize_invoke_trace(result: dict) -> dict:
     """Attach trace URL and output to the current trace."""
+    if not _langfuse_enabled():
+        return result
     langfuse = get_client()
     trace_url = langfuse.get_trace_url()
     if trace_url:
@@ -167,6 +183,8 @@ def setup_stream_trace(
     input_data: dict,
 ) -> None:
     """Set up Langfuse trace for streaming."""
+    if not _langfuse_enabled():
+        return
     langfuse = get_client()
     langfuse.update_current_trace(
         name=AGENT_NAME,
@@ -178,6 +196,8 @@ def setup_stream_trace(
 
 def finalize_stream_trace() -> str | None:
     """Finalize trace and return URL."""
+    if not _langfuse_enabled():
+        return None
     langfuse = get_client()
     trace_url = langfuse.get_trace_url()
     logger.info(f"Trace URL: {trace_url}")

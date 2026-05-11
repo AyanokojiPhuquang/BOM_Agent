@@ -1,6 +1,10 @@
 import sys
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+# Increase multipart limits before importing FastAPI
+os.environ.setdefault("MULTIPART_MAX_FIELDS", "10000")
 
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
@@ -14,6 +18,8 @@ from src.app.auth import get_current_admin_user, get_current_user
 from src.app.routers.auth import router as auth_router
 from src.app.routers.chat import router as chat_router
 from src.app.routers.conversations import router as conversations_router
+from src.app.routers.datasheets import router as datasheets_router
+from src.app.routers.boms import router as boms_router
 from src.app.routers.nhanh import router as nhanh_router
 from src.app.routers.files import router as files_router
 from src.app.routers.users import router as users_router
@@ -84,6 +90,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Increase multipart form field limit for large folder uploads (datasheets)
+from starlette.formparsers import MultiPartParser
+MultiPartParser.max_file_size = 1024 * 1024 * 500  # 500MB total
+MultiPartParser.max_file_count = 5000  # Support up to 5000 files
+
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -136,6 +147,22 @@ app.include_router(
     prefix="/api",
     tags=["file-manager"],
     dependencies=[Depends(get_current_admin_user)],
+)
+
+# Datasheets management (authenticated)
+app.include_router(
+    datasheets_router,
+    prefix="/api",
+    tags=["datasheets"],
+    dependencies=[Depends(get_current_user)],
+)
+
+# BOM history (authenticated)
+app.include_router(
+    boms_router,
+    prefix="/api",
+    tags=["boms"],
+    dependencies=[Depends(get_current_user)],
 )
 
 

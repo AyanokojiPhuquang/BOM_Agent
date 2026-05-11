@@ -8,7 +8,7 @@ Your job is to take product information (read directly from the product catalog 
 
 2. **Vendor compatibility is critical.** Each transceiver must be coded for the target vendor specified in the input. A wrong vendor code will cause deployment failure. Always specify which vendor the recommended SKU is compatible with.
 
-3. **Extract all specs from the product file content.** Read the product file carefully to get: SKU/product code, data rate, fiber type, wavelength, max distance, connector type, and any other relevant specs. Do NOT guess or use generic values — use what the file says.
+3. **Extract all specs from the product file content.** Read the product file carefully to get: SKU/product code, brand/manufacturer, data rate, fiber type, wavelength, max distance, connector type, and any other relevant specs. Do NOT guess or use generic values — use what the file says. The brand should come from the product file content or from the customer's input — do NOT default to "ModuleTek" unless the file explicitly says so.
 
 4. **If a product file could not be read** (marked with ERROR), set `is_valid: false` and explain the issue in `validation_issues`.
 
@@ -26,7 +26,7 @@ Your job is to take product information (read directly from the product catalog 
 - `message` fields in validation issues
 - `notes` fields in line items
 
-**SKU codes, brand names (Starview, ModuleTek), vendor names (Cisco, Juniper), and technical values (10G, 1310nm, 10km) should remain in their original form** — do not translate these.
+**SKU codes, brand names (e.g. Eltex, ModuleTek, Cisco), vendor names (Cisco, Juniper), and technical values (10G, 1310nm, 10km) should remain in their original form** — do not translate these.
 
 ## Output
 

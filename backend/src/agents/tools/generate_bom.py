@@ -25,6 +25,7 @@ from src.agents.tools.schemas import (
 )
 from src.configs import SETTINGS
 from src.db.database import get_manual_db_session
+from src.db.models.nhanh import NhanhProduct
 from src.db.repositories.nhanh import NhanhProductRepository
 from src.services.email_service import send_email
 from src.services.llms.models import llm_invoke
@@ -51,6 +52,8 @@ async def _resolve_product_paths(
 ) -> list[dict]:
     """Resolve product codes to datasheet file paths via the database.
 
+    Tries exact match first, then partial/fuzzy match on product code.
+
     Returns a list of dicts, one per item, with keys:
         product_code, datasheet_path (or None), quantity, vendor,
         device_model, notes, error (or None).
@@ -58,12 +61,50 @@ async def _resolve_product_paths(
     codes = [item.product_code for item in items]
 
     code_to_path: dict[str, str | None] = {}
+    all_products: list = []
     try:
         async with get_manual_db_session() as session:
             repo = NhanhProductRepository(session)
+            # Try exact match first
             products = await repo.get_by_codes(codes)
             for p in products:
                 code_to_path[p.code.strip().upper()] = p.datasheet_path
+
+            # For codes not found, try partial match
+            unmatched = [c for c in codes if c.strip().upper() not in code_to_path]
+            if unmatched:
+                from sqlmodel import select
+                result = await session.execute(select(NhanhProduct).where(NhanhProduct.datasheet_path.isnot(None)))
+                all_products = result.scalars().all()
+
+                for code in unmatched:
+                    key = code.strip().upper()
+                    # Normalize: remove spaces, special chars for comparison
+                    key_normalized = key.replace(" ", "").replace("-", "")
+                    for p in all_products:
+                        p_code = p.code.strip().upper()
+                        p_normalized = p_code.replace(" ", "").replace("-", "")
+                        # Match if one contains the other, or normalized versions match
+                        if (p_code in key or key in p_code or
+                            p_normalized in key_normalized or key_normalized in p_normalized):
+                            code_to_path[key] = p.datasheet_path
+                            break
+                    # If still not found, try searching in datasheet file content
+                    if key not in code_to_path:
+                        datasheets_dir = Path(SETTINGS.datasheets_dir).resolve()
+                        for p in all_products:
+                            if not p.datasheet_path:
+                                continue
+                            md_path = datasheets_dir / p.datasheet_path
+                            if md_path.exists():
+                                try:
+                                    content = md_path.read_text(encoding="utf-8")
+                                    # Search for the product code in file content
+                                    if code.strip() in content or code.strip().replace(" ", "") in content:
+                                        code_to_path[key] = p.datasheet_path
+                                        break
+                                except Exception:
+                                    pass
     except Exception as e:
         logger.warning(f"DB lookup for product codes failed: {e}")
 

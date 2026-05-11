@@ -14,7 +14,6 @@ from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.summarization import create_summarization_middleware
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
-from langfuse import observe
 from loguru import logger
 
 from src.agents.middleware import ReadOnlyFilesystemMiddleware
@@ -113,24 +112,13 @@ def _trace_input(query: str, context: BomAssistantContext) -> dict[str, Any]:
     }
 
 
-@observe()
 async def ainvoke(
     query: str,
     context: BomAssistantContext,
     checkpointer=None,
     image_urls: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Invoke the BOM assistant agent (non-streaming).
-
-    Args:
-        query: User's query
-        context: BomAssistantContext
-        checkpointer: Optional LangGraph checkpointer for conversation history
-        image_urls: Optional list of image data URLs for multimodal input
-
-    Returns:
-        Dict with 'response', 'sources', and optionally 'trace_url'
-    """
+    """Invoke the BOM assistant agent (non-streaming)."""
     setup_invoke_trace(
         session_id=context.session_id,
         user_id=context.user_id,
@@ -149,7 +137,6 @@ async def ainvoke(
     return finalize_invoke_trace(result)
 
 
-@observe()
 async def astream_events(
     query: str,
     context: BomAssistantContext,

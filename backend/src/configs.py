@@ -35,6 +35,7 @@ class NhanhConfig(BaseSettings):
     api_base_url: str = "https://pos.open.nhanh.vn"
     api_version: str = "3.0"
     webhooks_verify_token: str = "ilovestarlink"
+    proxy_url: str = "https://api-starlink.yitec.dev"
 
 
 class Settings(BaseSettings):
