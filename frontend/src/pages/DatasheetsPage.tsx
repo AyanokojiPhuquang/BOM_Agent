@@ -133,8 +133,8 @@ export function DatasheetsContent() {
         </p>
       </div>
 
-      {/* Upload Section */}
-      <div className="bg-dark-surface border border-dark-border rounded-xl p-6">
+      {/* Upload Folder Section - hidden for now */}
+      {false && <div className="bg-dark-surface border border-dark-border rounded-xl p-6">
         <h3 className="text-lg font-semibold text-white mb-4">Upload Datasheets Folder</h3>
         <p className="text-sm text-gray-400 mb-4">
           Select the datasheets folder from your computer. It should contain subfolders organized by product family
@@ -208,7 +208,7 @@ export function DatasheetsContent() {
             {error}
           </div>
         )}
-      </div>
+      </div>}
 
       {/* PDF Upload Section */}
       <div className="bg-dark-surface border border-dark-border rounded-xl p-6">
