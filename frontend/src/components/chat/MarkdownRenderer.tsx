@@ -108,7 +108,24 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
             return (
               <a
                 href={href}
-                download
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => {
+                  e.preventDefault();
+                  const token = localStorage.getItem('starlink_token');
+                  fetch(href, {
+                    headers: token ? { Authorization: `Bearer ${token}` } : {},
+                  })
+                    .then(res => res.blob())
+                    .then(blob => {
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = href.split('/').pop() || 'bom.xlsx';
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    });
+                }}
                 className="inline-block px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors no-underline"
               >
                 {children}
