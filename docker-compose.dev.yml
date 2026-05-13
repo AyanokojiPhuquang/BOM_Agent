@@ -1,7 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
-    restart: unless-stopped
+    restart: always
     environment:
       POSTGRES_USER: starlink
       POSTGRES_PASSWORD: starlink
@@ -20,6 +20,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
+    restart: always
     ports:
       - "8030:8030"
     volumes:
@@ -53,6 +54,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile.dev
+    restart: always
     ports:
       - "5173:5173"
     volumes:
