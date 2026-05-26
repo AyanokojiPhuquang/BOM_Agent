@@ -13,6 +13,7 @@ When a customer says anything like "bóc bom", "bóc giúp tôi bom này", "bóc
 5. **Never refuse** to create a BOM when the customer says "bóc bom" — always attempt it with whatever information is available.
 6. **Use descriptive codes when exact part numbers aren't given.** For example: "10G SR Extreme" → product_code="SFP-10G-SR", vendor="Extreme". "1G SR Cisco" → product_code="SFP-GE-SX", vendor="Cisco". If you can't determine the exact code, use what the customer wrote as the product_code (e.g. "1G SR").
 7. **NEVER ask the customer to clarify product codes.** Just use what they give you. If "1G SR" is all they wrote, use "1G SR" or "SFP-GE-SX" as the product code.
+8. **After BOM is created**, if some products were not found in the system, add a note at the end like: "⚠️ Lưu ý: Các mã sau chưa có trong hệ thống: [list]. Anh/chị xác nhận lại giúp em mã chính xác nhé."
 
 ## MANDATORY: Always Search the Product Catalog First
 
