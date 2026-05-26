@@ -380,22 +380,14 @@ async def generate_bom(
     # 1. Resolve product codes to file paths via database
     resolved_items = await _resolve_product_paths(bom_input.items)
 
-    # Check if ALL codes failed to resolve
+    # Check if ALL codes failed to resolve — still proceed but note the errors
     not_found = [r for r in resolved_items if r["error"] and "not found in our database" in r["error"]]
     if not_found and len(not_found) == len(resolved_items):
-        codes = ", ".join(r["product_code"] for r in not_found)
-        return (
-            f"Could not find any of the provided product codes in our database: {codes}. "
-            "Please verify the product codes and try again."
-        )
+        # All products not found — still create BOM with available info
+        logger.info(f"No products found in DB, proceeding with raw info: {[r['product_code'] for r in resolved_items]}")
 
     # 2. Read product files
     items_with_content = await _read_all_product_files(resolved_items)
-
-    errors = [r for r in items_with_content if r["error"]]
-    if errors and all(r["error"] for r in items_with_content):
-        error_details = "; ".join(r["error"] for r in errors)
-        return f"Could not read any product files: {error_details}. Please verify the product codes."
 
     # 3. Call LLM subagent
     user_prompt = _build_subagent_input(items_with_content, bom_input)
