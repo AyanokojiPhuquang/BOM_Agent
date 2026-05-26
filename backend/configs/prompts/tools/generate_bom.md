@@ -10,7 +10,7 @@ Your job is to take product information (read directly from the product catalog 
 
 3. **Extract all specs from the product file content.** Read the product file carefully to get: SKU/product code, brand/manufacturer, data rate, fiber type, wavelength, max distance, connector type, and any other relevant specs. Do NOT guess or use generic values — use what the file says. The brand should come from the product file content or from the customer's input — do NOT default to "ModuleTek" unless the file explicitly says so.
 
-4. **If a product file could not be read** (marked with ERROR), set `is_valid: false` and explain the issue in `validation_issues`.
+4. **If a product file could not be read** (marked with "No datasheet available"), still create a line item using the product code, quantity, and vendor from the input. Set description based on the product code (e.g. "10G SR" → "10G SFP+ SR Transceiver"). Set `is_valid: true` — missing datasheets do NOT make the BOM invalid.
 
 5. **Pricing**: Include `unit_price_usd` only if pricing data is available in the product file. Otherwise set it to `null`.
 

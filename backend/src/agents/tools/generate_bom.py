@@ -204,7 +204,7 @@ def _build_subagent_input(items_with_content: list[dict], bom_input: GenerateBom
             sections.append(f"- Notes: {item['notes']}")
 
         if item["error"]:
-            sections.append(f"- ERROR: {item['error']}")
+            sections.append(f"- Note: No datasheet available for this product. Use the product code and vendor info above to create the line item.")
         elif item["product_content"]:
             sections.append(f"\n**Product file content:**\n```\n{item['product_content']}\n```")
 
@@ -397,7 +397,8 @@ async def generate_bom(
         logger.error(f"BOM subagent error: {e}")
         return f"Error generating BOM: {e}. Please try again."
 
-    if not bom_output.is_valid:
+    if not bom_output.is_valid and not bom_output.line_items:
+        # Only block if there are NO line items at all
         return _format_validation_issues(bom_output)
 
     # 4. Check inventory
