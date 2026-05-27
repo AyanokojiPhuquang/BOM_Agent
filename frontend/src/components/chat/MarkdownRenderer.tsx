@@ -103,27 +103,38 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
               />
             );
           }
-          // Render .xlsx links as download buttons
-          if (href && /\.xlsx$/i.test(href)) {
+          // Render .xlsx links or BOM download links as download buttons
+          if (href && (/\.xlsx$/i.test(href) || href.includes('/api/files/boms/'))) {
+            // Clean URL - remove sandbox: prefix or other artifacts from LLM
+            const cleanHref = href.replace(/^sandbox:/, '').replace(/^\./, '');
+            const downloadUrl = cleanHref.startsWith('/') ? cleanHref : `/${cleanHref}`;
             return (
               <a
-                href={href}
+                href={downloadUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={(e) => {
                   e.preventDefault();
+                  e.stopPropagation();
                   const token = localStorage.getItem('starlink_token');
-                  fetch(href, {
+                  fetch(downloadUrl, {
                     headers: token ? { Authorization: `Bearer ${token}` } : {},
                   })
-                    .then(res => res.blob())
+                    .then(res => {
+                      if (!res.ok) throw new Error('Download failed');
+                      return res.blob();
+                    })
                     .then(blob => {
                       const url = URL.createObjectURL(blob);
                       const a = document.createElement('a');
                       a.href = url;
-                      a.download = href.split('/').pop() || 'bom.xlsx';
+                      a.download = downloadUrl.split('/').pop() || 'bom.xlsx';
                       a.click();
                       URL.revokeObjectURL(url);
+                    })
+                    .catch(() => {
+                      // Fallback: open in new tab
+                      window.open(downloadUrl, '_blank');
                     });
                 }}
                 className="inline-block px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded transition-colors no-underline"

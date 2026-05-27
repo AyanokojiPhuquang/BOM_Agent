@@ -32,6 +32,34 @@ export function ChatInput({ onSend, disabled = false, onStop }: ChatInputProps) 
     }
   }
 
+  function handlePaste(e: React.ClipboardEvent) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) continue;
+
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          setAttachments(prev => [
+            ...prev,
+            {
+              id: generateId(),
+              dataUrl: ev.target!.result as string,
+              name: `pasted-image-${Date.now()}.png`,
+              size: file.size,
+            },
+          ]);
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+  }
+
   function handleSend() {
     const trimmed = text.trim();
     if (!trimmed && attachments.length === 0) return;
@@ -105,6 +133,7 @@ export function ChatInput({ onSend, disabled = false, onStop }: ChatInputProps) 
               value={text}
               onChange={e => { setText(e.target.value); autoResize(); }}
               onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
               placeholder="Type a message..."
               rows={1}
               className="flex-1 bg-transparent text-white placeholder-gray-500 focus:outline-none text-sm leading-6 py-2"
