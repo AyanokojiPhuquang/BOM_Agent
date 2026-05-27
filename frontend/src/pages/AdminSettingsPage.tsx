@@ -5,13 +5,11 @@ import { BackArrowIcon, UsersIcon, FolderOutlineIcon, CollapseIcon } from '@/com
 import { UserManagementContent } from '@/pages/UserManagementPage';
 import { DatasheetsContent } from '@/pages/DatasheetsPage';
 import { BomsContent } from '@/pages/BomsPage';
-import { PromptsContent } from '@/pages/PromptsPage';
 
 const TABS = [
   { key: 'users', label: 'Users', icon: <UsersIcon /> },
   { key: 'datasheets', label: 'Datasheets', icon: <FolderOutlineIcon /> },
   { key: 'boms', label: 'BOMs', icon: <FolderOutlineIcon /> },
-  { key: 'prompts', label: 'Prompts', icon: <FolderOutlineIcon /> },
 ] as const;
 
 type TabKey = (typeof TABS)[number]['key'];
@@ -81,7 +79,6 @@ export function AdminSettingsPage() {
           {activeTab === 'users' && <UserManagementContent />}
           {activeTab === 'datasheets' && <DatasheetsContent />}
           {activeTab === 'boms' && <BomsContent />}
-          {activeTab === 'prompts' && <PromptsContent />}
         </div>
       </div>
     </div>
