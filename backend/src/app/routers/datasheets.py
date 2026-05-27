@@ -470,8 +470,7 @@ async def upload_pdf_datasheets(
             # Convert PDF to markdown
             md_path = pdf_to_markdown(temp_pdf, product_dir)
 
-            # Remove the original PDF (keep only markdown + images)
-            temp_pdf.unlink()
+            # Keep the original PDF for download
 
             # Extract product codes using LLM
             md_content = md_path.read_text(encoding="utf-8")
@@ -514,4 +513,66 @@ async def upload_pdf_datasheets(
             for p in all_new_products
         ],
         errors=errors,
+    )
+
+
+# --- PDF Download ---
+
+
+class PdfFileItem(BaseModel):
+    filename: str
+    category: str
+    size: int
+    download_url: str
+
+
+class PdfListResponse(BaseModel):
+    total: int
+    files: list[PdfFileItem]
+
+
+@router.get("/pdfs", response_model=PdfListResponse)
+async def list_uploaded_pdfs(
+    current_user: User = Depends(get_current_user),
+):
+    """List all uploaded PDF files available for download."""
+    datasheets_dir = Path(SETTINGS.datasheets_dir).resolve()
+    files = []
+
+    if datasheets_dir.exists():
+        for pdf_file in datasheets_dir.rglob("*.pdf"):
+            relative = pdf_file.relative_to(datasheets_dir)
+            parts = relative.parts
+            category = parts[0] if len(parts) > 1 else "general"
+            files.append(PdfFileItem(
+                filename=pdf_file.name,
+                category=category,
+                size=pdf_file.stat().st_size,
+                download_url=f"/api/datasheets/pdfs/{relative}",
+            ))
+
+    return PdfListResponse(total=len(files), files=files)
+
+
+@router.get("/pdfs/{file_path:path}")
+async def download_pdf(
+    file_path: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Download an uploaded PDF file."""
+    from fastapi.responses import FileResponse
+
+    if ".." in file_path:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid path")
+
+    datasheets_dir = Path(SETTINGS.datasheets_dir).resolve()
+    full_path = datasheets_dir / file_path
+
+    if not full_path.exists() or not full_path.suffix == ".pdf":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PDF not found")
+
+    return FileResponse(
+        path=str(full_path),
+        media_type="application/pdf",
+        filename=full_path.name,
     )

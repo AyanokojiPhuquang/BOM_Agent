@@ -6,7 +6,9 @@ import {
   deleteAllDatasheets,
   deleteProduct,
   uploadPdfDatasheets,
+  listUploadedPdfs,
   type DatasheetProduct,
+  type PdfFileItem,
 } from '@/services/datasheets';
 
 export function DatasheetsContent() {
@@ -21,6 +23,7 @@ export function DatasheetsContent() {
   const [searchQuery, setSearchQuery] = useState('');
   const [replaceOnUpload, setReplaceOnUpload] = useState(false);
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
+  const [pdfFiles, setPdfFiles] = useState<PdfFileItem[]>([]);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
 
@@ -32,6 +35,8 @@ export function DatasheetsContent() {
       setProducts(data.products);
       setCategories(data.categories);
       setTotal(data.total);
+      const pdfs = await listUploadedPdfs();
+      setPdfFiles(pdfs.files);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load datasheets');
     } finally {
@@ -329,6 +334,56 @@ export function DatasheetsContent() {
                         className="text-red-400 hover:text-red-300 text-xs hover:bg-red-500/10 px-2 py-1 rounded transition-colors"
                       >
                         Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Uploaded PDFs */}
+      {pdfFiles.length > 0 && (
+        <div className="bg-dark-surface border border-dark-border rounded-xl p-6">
+          <h3 className="text-lg font-semibold text-white mb-4">Uploaded PDFs ({pdfFiles.length})</h3>
+          <div className="overflow-auto max-h-64">
+            <table className="w-full text-sm">
+              <thead className="text-gray-400 border-b border-dark-border">
+                <tr>
+                  <th className="text-left py-2 px-3 font-medium">Filename</th>
+                  <th className="text-left py-2 px-3 font-medium">Category</th>
+                  <th className="text-right py-2 px-3 font-medium">Size</th>
+                  <th className="text-right py-2 px-3 font-medium">Action</th>
+                </tr>
+              </thead>
+              <tbody className="text-gray-300">
+                {pdfFiles.map(f => (
+                  <tr key={f.download_url} className="border-b border-dark-border/50 hover:bg-dark-hover/50">
+                    <td className="py-2 px-3 font-mono text-white text-xs">{f.filename}</td>
+                    <td className="py-2 px-3">
+                      <span className="px-2 py-0.5 rounded-full text-xs bg-accent/10 text-accent">{f.category}</span>
+                    </td>
+                    <td className="py-2 px-3 text-right text-gray-400">{(f.size / 1024).toFixed(0)} KB</td>
+                    <td className="py-2 px-3 text-right">
+                      <button
+                        onClick={() => {
+                          const token = localStorage.getItem('starlink_token');
+                          fetch(f.download_url, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+                            .then(res => res.blob())
+                            .then(blob => {
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url;
+                              a.download = f.filename;
+                              a.click();
+                              URL.revokeObjectURL(url);
+                            });
+                        }}
+                        className="text-accent hover:text-accent-hover text-xs px-2 py-1 rounded hover:bg-accent/10 transition-colors"
+                      >
+                        Download
                       </button>
                     </td>
                   </tr>

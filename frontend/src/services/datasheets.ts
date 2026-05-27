@@ -131,3 +131,20 @@ export async function uploadPdfDatasheets(
 
   return apiUpload<PdfUploadResponse>('/api/datasheets/upload-pdf', formData);
 }
+
+
+export interface PdfFileItem {
+  filename: string;
+  category: string;
+  size: number;
+  download_url: string;
+}
+
+export interface PdfListResponse {
+  total: number;
+  files: PdfFileItem[];
+}
+
+export async function listUploadedPdfs(): Promise<PdfListResponse> {
+  return api<PdfListResponse>('/api/datasheets/pdfs');
+}
