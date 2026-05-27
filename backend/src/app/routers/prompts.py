@@ -87,12 +87,16 @@ async def get_prompt(prompt_path: str, current_user: User = Depends(get_current_
     relative = file_path.relative_to(PROMPTS_DIR)
     parts = relative.parts
     category = parts[0] if len(parts) > 1 else "general"
+    content = file_path.read_text(encoding="utf-8")
+    original = _get_original_content(str(relative))
 
     return PromptItem(
         path=str(relative),
         name=file_path.stem,
         category=category,
-        content=file_path.read_text(encoding="utf-8"),
+        content=content,
+        has_original=original is not None,
+        is_modified=original is not None and content != original,
     )
 
 
@@ -115,12 +119,15 @@ async def update_prompt(
     relative = file_path.relative_to(PROMPTS_DIR)
     parts = relative.parts
     category = parts[0] if len(parts) > 1 else "general"
+    original = _get_original_content(str(relative))
 
     return PromptItem(
         path=str(relative),
         name=file_path.stem,
         category=category,
         content=request.content,
+        has_original=original is not None,
+        is_modified=original is not None and request.content != original,
     )
 
 
