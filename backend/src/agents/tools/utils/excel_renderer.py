@@ -43,7 +43,7 @@ _BOM_COLUMNS = [
     ("SKU", 22),
     ("Brand", 12),
     ("Description", 35),
-    ("Vendor", 14),
+    ("Main Device", 14),
     ("Data Rate", 10),
     ("Fiber", 13),
     ("Wavelength", 12),

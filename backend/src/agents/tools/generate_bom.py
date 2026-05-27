@@ -287,8 +287,8 @@ def _format_bom_summary(bom: GenerateBomOutput) -> str:
     if bom.customer_phone:
         lines.append(f"Phone: {bom.customer_phone}\n")
 
-    lines.append("| # | SKU | Description | Vendor | Qty | Price |")
-    lines.append("|---|-----|-------------|--------|-----|-------|")
+    lines.append("| # | SKU | Description | Main Device | Qty | Price |")
+    lines.append("|---|-----|-------------|-------------|-----|-------|")
     for item in bom.line_items:
         price = f"${item.unit_price_usd:.2f}" if item.unit_price_usd else "—"
         lines.append(f"| {item.line} | {item.sku} | {item.description} | {item.vendor_compatibility} | {item.quantity} | {price} |")

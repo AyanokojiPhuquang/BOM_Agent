@@ -20,6 +20,7 @@ from src.app.routers.chat import router as chat_router
 from src.app.routers.conversations import router as conversations_router
 from src.app.routers.datasheets import router as datasheets_router
 from src.app.routers.boms import router as boms_router
+from src.app.routers.prompts import router as prompts_router
 from src.app.routers.nhanh import router as nhanh_router
 from src.app.routers.files import router as files_router
 from src.app.routers.users import router as users_router
@@ -162,6 +163,14 @@ app.include_router(
     boms_router,
     prefix="/api",
     tags=["boms"],
+    dependencies=[Depends(get_current_user)],
+)
+
+# Prompt management (authenticated)
+app.include_router(
+    prompts_router,
+    prefix="/api",
+    tags=["prompts"],
     dependencies=[Depends(get_current_user)],
 )
 
