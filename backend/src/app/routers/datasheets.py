@@ -583,7 +583,7 @@ async def delete_pdf(
     file_path: str,
     current_user: User = Depends(get_current_user),
 ):
-    """Delete an uploaded PDF file."""
+    """Delete an uploaded PDF file, its converted markdown, images, and DB records."""
     if ".." in file_path:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid path")
 
@@ -593,5 +593,35 @@ async def delete_pdf(
     if not full_path.exists() or not full_path.suffix == ".pdf":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PDF not found")
 
-    full_path.unlink()
-    return {"message": f"PDF '{full_path.name}' deleted successfully."}
+    # The PDF sits in a product folder (e.g. datasheets/Eltex/MES24xx/file.pdf)
+    product_folder = full_path.parent
+    # Get the relative path of the markdown file to match DB records
+    md_files = list(product_folder.glob("*.md"))
+    md_relative_paths = [str(f.relative_to(datasheets_dir)) for f in md_files]
+
+    # Delete product records that point to these markdown files
+    deleted_products = 0
+    if md_relative_paths:
+        async with get_manual_db_session() as session:
+            for md_path in md_relative_paths:
+                result = await session.execute(
+                    select(NhanhProduct).where(NhanhProduct.datasheet_path == md_path)
+                )
+                for p in result.scalars().all():
+                    await session.delete(p)
+                    deleted_products += 1
+            await session.commit()
+
+    # Delete the entire product folder (PDF + markdown + images)
+    if product_folder.exists():
+        shutil.rmtree(product_folder)
+
+    # Remove empty parent category folder
+    category_folder = product_folder.parent
+    if category_folder.exists() and not any(category_folder.iterdir()):
+        category_folder.rmdir()
+
+    return {
+        "message": f"PDF '{full_path.name}' and {deleted_products} product(s) deleted.",
+        "deleted_products": deleted_products,
+    }
