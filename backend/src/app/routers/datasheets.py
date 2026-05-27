@@ -576,3 +576,22 @@ async def download_pdf(
         media_type="application/pdf",
         filename=full_path.name,
     )
+
+
+@router.delete("/pdfs/{file_path:path}")
+async def delete_pdf(
+    file_path: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Delete an uploaded PDF file."""
+    if ".." in file_path:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid path")
+
+    datasheets_dir = Path(SETTINGS.datasheets_dir).resolve()
+    full_path = datasheets_dir / file_path
+
+    if not full_path.exists() or not full_path.suffix == ".pdf":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PDF not found")
+
+    full_path.unlink()
+    return {"message": f"PDF '{full_path.name}' deleted successfully."}

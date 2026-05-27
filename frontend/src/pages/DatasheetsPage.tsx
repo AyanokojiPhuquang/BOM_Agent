@@ -7,6 +7,7 @@ import {
   deleteProduct,
   uploadPdfDatasheets,
   listUploadedPdfs,
+  deleteUploadedPdf,
   type DatasheetProduct,
   type PdfFileItem,
 } from '@/services/datasheets';
@@ -367,24 +368,40 @@ export function DatasheetsContent() {
                     </td>
                     <td className="py-2 px-3 text-right text-gray-400">{(f.size / 1024).toFixed(0)} KB</td>
                     <td className="py-2 px-3 text-right">
-                      <button
-                        onClick={() => {
-                          const token = localStorage.getItem('starlink_token');
-                          fetch(f.download_url, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-                            .then(res => res.blob())
-                            .then(blob => {
-                              const url = URL.createObjectURL(blob);
-                              const a = document.createElement('a');
-                              a.href = url;
-                              a.download = f.filename;
-                              a.click();
-                              URL.revokeObjectURL(url);
-                            });
-                        }}
-                        className="text-accent hover:text-accent-hover text-xs px-2 py-1 rounded hover:bg-accent/10 transition-colors"
-                      >
-                        Download
-                      </button>
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => {
+                            const token = localStorage.getItem('starlink_token');
+                            fetch(f.download_url, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+                              .then(res => res.blob())
+                              .then(blob => {
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = f.filename;
+                                a.click();
+                                URL.revokeObjectURL(url);
+                              });
+                          }}
+                          className="text-accent hover:text-accent-hover text-xs px-2 py-1 rounded hover:bg-accent/10 transition-colors"
+                        >
+                          Download
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (!confirm(`Delete PDF "${f.filename}"?`)) return;
+                            try {
+                              await deleteUploadedPdf(f.download_url);
+                              await fetchDatasheets();
+                            } catch (e: unknown) {
+                              setError(e instanceof Error ? e.message : 'Delete failed');
+                            }
+                          }}
+                          className="text-red-400 hover:text-red-300 text-xs px-2 py-1 rounded hover:bg-red-500/10 transition-colors"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

@@ -148,3 +148,8 @@ export interface PdfListResponse {
 export async function listUploadedPdfs(): Promise<PdfListResponse> {
   return api<PdfListResponse>('/api/datasheets/pdfs');
 }
+
+
+export async function deleteUploadedPdf(downloadUrl: string): Promise<{ message: string }> {
+  return api<{ message: string }>(downloadUrl, { method: 'DELETE' });
+}
