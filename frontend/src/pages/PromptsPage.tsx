@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { listPrompts, updatePrompt, type PromptItem } from '@/services/prompts';
+import { listPrompts, updatePrompt, revertPrompt, type PromptItem } from '@/services/prompts';
 import { cn } from '@/utils/cn';
 
 export function PromptsContent() {
@@ -53,6 +53,25 @@ export function PromptsContent() {
     }
   };
 
+  const handleRevert = async () => {
+    if (!selected) return;
+    if (!confirm('Revert this prompt to the original version? Your changes will be lost.')) return;
+    setIsSaving(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const reverted = await revertPrompt(selected.path);
+      setSelected(reverted);
+      setEditContent(reverted.content);
+      setPrompts(prev => prev.map(p => p.path === reverted.path ? reverted : p));
+      setMessage('Prompt reverted to original!');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to revert');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const hasChanges = selected && editContent !== selected.content;
 
   const categories = [...new Set(prompts.map(p => p.category))];
@@ -100,10 +119,23 @@ export function PromptsContent() {
           {selected ? (
             <>
               <div className="flex items-center justify-between px-4 py-3 border-b border-dark-border">
+                <div className="flex items-center gap-2">
                 <div>
                   <span className="text-white font-medium">{selected.name}</span>
                   <span className="text-gray-500 text-xs ml-2">{selected.path}</span>
+                  {selected.is_modified && <span className="text-yellow-400 text-xs ml-2">(modified)</span>}
                 </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {selected.has_original && selected.is_modified && (
+                  <button
+                    onClick={handleRevert}
+                    disabled={isSaving}
+                    className="px-3 py-1.5 rounded-lg text-sm font-medium text-yellow-400 border border-yellow-400/30 hover:bg-yellow-400/10 transition-colors"
+                  >
+                    Revert
+                  </button>
+                )}
                 <button
                   onClick={handleSave}
                   disabled={!hasChanges || isSaving}
@@ -116,6 +148,7 @@ export function PromptsContent() {
                 >
                   {isSaving ? 'Saving...' : 'Save'}
                 </button>
+              </div>
               </div>
               <textarea
                 value={editContent}

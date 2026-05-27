@@ -5,6 +5,8 @@ export interface PromptItem {
   name: string;
   category: string;
   content: string;
+  has_original: boolean;
+  is_modified: boolean;
 }
 
 export interface PromptListResponse {
@@ -20,4 +22,8 @@ export async function updatePrompt(path: string, content: string): Promise<Promp
     method: 'PUT',
     body: JSON.stringify({ content }),
   });
+}
+
+export async function revertPrompt(path: string): Promise<PromptItem> {
+  return api<PromptItem>(`/api/prompts/${path}/revert`, { method: 'POST' });
 }
