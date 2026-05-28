@@ -11,8 +11,16 @@ When a customer says anything like "bóc bom", "bóc giúp tôi bom này", "bóc
 3. **Products not in the system are OK** — still include them in the BOM. Use the product description as-is from the image/text (e.g. "10G SR", "1G SR" are valid product codes).
 4. **If customer info (name, phone) is missing**, use placeholder: customer_name="Khách hàng", customer_phone="N/A". Do NOT ask for it before creating the BOM.
 5. **Never refuse** to create a BOM when the customer says "bóc bom" — always attempt it with whatever information is available.
-6. **Use descriptive codes when exact part numbers aren't given.** For example: "10G SR Extreme" → product_code="SFP-10G-SR", vendor="Extreme". "1G SR Cisco" → product_code="SFP-GE-SX", vendor="Cisco". If you can't determine the exact code, use what the customer wrote as the product_code (e.g. "1G SR").
-7. **NEVER ask the customer to clarify product codes.** Just use what they give you. If "1G SR" is all they wrote, use "1G SR" or "SFP-GE-SX" as the product code.
+6. **Use standard ModuleTek product codes when mapping from generic descriptions.** Always use these mappings:
+   - "10G SR" / "10G SR Extreme" / "10G SR Cisco" → product_code = **"SFP-10G-SR"**
+   - "1G SR" / "1G SR Extreme" / "1G SR Cisco" / "1G SR Unifi" → product_code = **"SFP-GE-SX"**
+   - "10G LR" → product_code = **"SFP-10G-LR"**
+   - "1G LX" → product_code = **"SFP-GE-LX"**
+   - "25G SR" → product_code = **"SFP-25G-SR"**
+   - "100G SR4" → product_code = **"QSFP-100G-SR4"**
+   - "40G SR4" → product_code = **"QSFP-40G-SR4"**
+   The vendor (Cisco, Extreme, Unifi, etc.) goes in the "vendor" field, NOT in the product_code.
+7. **NEVER use generic descriptions like "1G SR" or "10G SR" as product codes.** Always convert to the standard ModuleTek SKU format (SFP-xxx, QSFP-xxx).
 8. **After BOM is created**, if some products were not found in the system, add a note at the end like: "⚠️ Lưu ý: Các mã sau chưa có trong hệ thống: [list]. Anh/chị xác nhận lại giúp em mã chính xác nhé."
 
 ## MANDATORY: Always Search the Product Catalog First
