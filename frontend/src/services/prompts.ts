@@ -1,29 +1,30 @@
 import { api } from './api';
 
-export interface PromptItem {
-  path: string;
-  name: string;
-  category: string;
+export interface UserInstruction {
+  id: string;
   content: string;
-  has_original: boolean;
-  is_modified: boolean;
 }
 
-export interface PromptListResponse {
-  prompts: PromptItem[];
+export interface UserInstructionsResponse {
+  instructions: UserInstruction[];
+  is_processing: boolean;
 }
 
-export async function listPrompts(): Promise<PromptListResponse> {
-  return api<PromptListResponse>('/api/prompts/');
+export async function listInstructions(): Promise<UserInstructionsResponse> {
+  return api<UserInstructionsResponse>('/api/prompts/instructions');
 }
 
-export async function updatePrompt(path: string, content: string): Promise<PromptItem> {
-  return api<PromptItem>(`/api/prompts/${path}`, {
-    method: 'PUT',
+export async function addInstruction(content: string): Promise<{ instruction: UserInstruction; message: string }> {
+  return api<{ instruction: UserInstruction; message: string }>('/api/prompts/instructions', {
+    method: 'POST',
     body: JSON.stringify({ content }),
   });
 }
 
-export async function revertPrompt(path: string): Promise<PromptItem> {
-  return api<PromptItem>(`/api/prompts/${path}/revert`, { method: 'POST' });
+export async function deleteInstruction(id: string): Promise<{ message: string }> {
+  return api<{ message: string }>(`/api/prompts/instructions/${id}`, { method: 'DELETE' });
+}
+
+export async function resetPrompt(): Promise<{ message: string }> {
+  return api<{ message: string }>('/api/prompts/reset', { method: 'POST' });
 }

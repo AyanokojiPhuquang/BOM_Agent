@@ -1,168 +1,180 @@
 import { useState, useEffect, useCallback } from 'react';
-import { listPrompts, updatePrompt, revertPrompt, type PromptItem } from '@/services/prompts';
+import { listInstructions, addInstruction, deleteInstruction, resetPrompt, type UserInstruction } from '@/services/prompts';
 import { cn } from '@/utils/cn';
 
 export function PromptsContent() {
-  const [prompts, setPrompts] = useState<PromptItem[]>([]);
-  const [selected, setSelected] = useState<PromptItem | null>(null);
-  const [editContent, setEditContent] = useState('');
+  const [instructions, setInstructions] = useState<UserInstruction[]>([]);
+  const [newInstruction, setNewInstruction] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchPrompts = useCallback(async () => {
+  const fetchInstructions = useCallback(async () => {
     setIsLoading(true);
     try {
-      const data = await listPrompts();
-      setPrompts(data.prompts);
-      if (data.prompts.length > 0 && !selected) {
-        setSelected(data.prompts[0]);
-        setEditContent(data.prompts[0].content);
-      }
+      const data = await listInstructions();
+      setInstructions(data.instructions);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to load prompts');
+      setError(e instanceof Error ? e.message : 'Failed to load instructions');
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  useEffect(() => { fetchPrompts(); }, [fetchPrompts]);
+  useEffect(() => { fetchInstructions(); }, [fetchInstructions]);
 
-  const handleSelect = (prompt: PromptItem) => {
-    setSelected(prompt);
-    setEditContent(prompt.content);
-    setMessage(null);
-    setError(null);
-  };
-
-  const handleSave = async () => {
-    if (!selected) return;
-    setIsSaving(true);
+  const handleAdd = async () => {
+    if (!newInstruction.trim()) return;
+    setIsProcessing(true);
     setMessage(null);
     setError(null);
     try {
-      const updated = await updatePrompt(selected.path, editContent);
-      setSelected(updated);
-      setPrompts(prev => prev.map(p => p.path === updated.path ? updated : p));
-      setMessage('Prompt saved successfully!');
+      const result = await addInstruction(newInstruction.trim());
+      setInstructions(prev => [...prev, result.instruction]);
+      setNewInstruction('');
+      setMessage(result.message);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to save');
+      setError(e instanceof Error ? e.message : 'Failed to add instruction');
     } finally {
-      setIsSaving(false);
+      setIsProcessing(false);
     }
   };
 
-  const handleRevert = async () => {
-    if (!selected) return;
-    if (!confirm('Revert this prompt to the original version? Your changes will be lost.')) return;
-    setIsSaving(true);
+  const handleDelete = async (id: string) => {
+    setIsProcessing(true);
     setMessage(null);
     setError(null);
     try {
-      const reverted = await revertPrompt(selected.path);
-      setSelected(reverted);
-      setEditContent(reverted.content);
-      setPrompts(prev => prev.map(p => p.path === reverted.path ? reverted : p));
-      setMessage('Prompt reverted to original!');
+      await deleteInstruction(id);
+      setInstructions(prev => prev.filter(i => i.id !== id));
+      setMessage('Instruction removed');
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to revert');
+      setError(e instanceof Error ? e.message : 'Failed to delete instruction');
     } finally {
-      setIsSaving(false);
+      setIsProcessing(false);
     }
   };
 
-  const hasChanges = selected && editContent !== selected.content;
-
-  const categories = [...new Set(prompts.map(p => p.category))];
+  const handleReset = async () => {
+    if (!confirm('Reset all custom instructions? The AI will revert to default behavior.')) return;
+    setIsProcessing(true);
+    setMessage(null);
+    setError(null);
+    try {
+      await resetPrompt();
+      setInstructions([]);
+      setMessage('AI behavior reset to default');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to reset');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-6">
+    <div className="p-6 max-w-4xl mx-auto space-y-6">
+      {/* Header */}
       <div>
-        <h2 className="text-2xl font-bold text-white">Prompt Management</h2>
-        <p className="text-gray-400 mt-1">View and edit agent prompts. Changes take effect immediately.</p>
+        <h2 className="text-2xl font-bold text-white">AI Behavior Settings</h2>
+        <p className="text-gray-400 mt-1">
+          Add custom instructions to control how the AI responds. For example: greeting style, tone of voice, language preferences, or specific rules.
+        </p>
       </div>
 
+      {/* Messages */}
       {message && (
-        <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/20 text-green-400 text-sm">{message}</div>
+        <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/20 text-green-400 text-sm">
+          {message}
+        </div>
       )}
       {error && (
-        <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">{error}</div>
+        <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+          {error}
+        </div>
       )}
 
-      <div className="flex gap-4 h-[70vh]">
-        {/* Sidebar - prompt list */}
-        <div className="w-64 flex-shrink-0 bg-dark-surface border border-dark-border rounded-xl overflow-auto">
-          {categories.map(cat => (
-            <div key={cat}>
-              <div className="px-3 py-2 text-xs font-semibold text-gray-500 uppercase">{cat}</div>
-              {prompts.filter(p => p.category === cat).map(prompt => (
-                <button
-                  key={prompt.path}
-                  onClick={() => handleSelect(prompt)}
-                  className={cn(
-                    'w-full text-left px-3 py-2 text-sm transition-colors',
-                    selected?.path === prompt.path
-                      ? 'bg-accent/15 text-accent'
-                      : 'text-gray-300 hover:bg-dark-hover'
-                  )}
-                >
-                  {prompt.name}
-                </button>
-              ))}
-            </div>
-          ))}
+      {/* Processing indicator */}
+      {isProcessing && (
+        <div className="flex items-center gap-2 p-3 rounded-lg bg-accent/10 border border-accent/20 text-accent text-sm">
+          <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          AI is updating behavior settings...
         </div>
+      )}
 
-        {/* Editor */}
-        <div className="flex-1 flex flex-col bg-dark-surface border border-dark-border rounded-xl overflow-hidden">
-          {selected ? (
-            <>
-              <div className="flex items-center justify-between px-4 py-3 border-b border-dark-border">
-                <div className="flex items-center gap-2">
-                <div>
-                  <span className="text-white font-medium">{selected.name}</span>
-                  <span className="text-gray-500 text-xs ml-2">{selected.path}</span>
-                  {selected.is_modified && <span className="text-yellow-400 text-xs ml-2">(modified)</span>}
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                {selected.has_original && selected.is_modified && (
-                  <button
-                    onClick={handleRevert}
-                    disabled={isSaving}
-                    className="px-3 py-1.5 rounded-lg text-sm font-medium text-yellow-400 border border-yellow-400/30 hover:bg-yellow-400/10 transition-colors"
-                  >
-                    Revert
-                  </button>
-                )}
-                <button
-                  onClick={handleSave}
-                  disabled={!hasChanges || isSaving}
-                  className={cn(
-                    'px-4 py-1.5 rounded-lg text-sm font-medium transition-colors',
-                    hasChanges
-                      ? 'bg-accent text-white hover:bg-accent/90'
-                      : 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                  )}
-                >
-                  {isSaving ? 'Saving...' : 'Save'}
-                </button>
-              </div>
-              </div>
-              <textarea
-                value={editContent}
-                onChange={e => setEditContent(e.target.value)}
-                className="flex-1 p-4 bg-dark-bg text-gray-200 text-sm font-mono leading-6 resize-none focus:outline-none"
-                spellCheck={false}
-              />
-            </>
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-gray-500">
-              Select a prompt to edit
-            </div>
+      {/* Add new instruction */}
+      <div className="bg-dark-surface border border-dark-border rounded-xl p-6">
+        <h3 className="text-lg font-semibold text-white mb-3">Add Instruction</h3>
+        <div className="flex gap-3">
+          <textarea
+            value={newInstruction}
+            onChange={e => setNewInstruction(e.target.value)}
+            placeholder="E.g.: Always greet the customer warmly in Vietnamese. Use formal tone. When listing products, always include the price if available."
+            className="flex-1 px-4 py-3 rounded-lg bg-dark-bg border border-dark-border text-white text-sm placeholder-gray-500 focus:outline-none focus:border-accent resize-none"
+            rows={3}
+            disabled={isProcessing}
+          />
+          <button
+            onClick={handleAdd}
+            disabled={!newInstruction.trim() || isProcessing}
+            className={cn(
+              'px-6 py-3 rounded-lg text-sm font-medium transition-colors self-end',
+              newInstruction.trim() && !isProcessing
+                ? 'bg-accent text-white hover:bg-accent/90'
+                : 'bg-gray-600 text-gray-400 cursor-not-allowed'
+            )}
+          >
+            Add
+          </button>
+        </div>
+      </div>
+
+      {/* Active instructions */}
+      <div className="bg-dark-surface border border-dark-border rounded-xl p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-white">
+            Active Instructions ({instructions.length})
+          </h3>
+          {instructions.length > 0 && (
+            <button
+              onClick={handleReset}
+              disabled={isProcessing}
+              className="px-3 py-1.5 rounded-lg text-sm font-medium text-red-400 border border-red-400/30 hover:bg-red-400/10 transition-colors"
+            >
+              Reset All
+            </button>
           )}
         </div>
+
+        {instructions.length > 0 ? (
+          <div className="space-y-3">
+            {instructions.map(inst => (
+              <div
+                key={inst.id}
+                className="flex items-start gap-3 p-4 rounded-lg bg-dark-bg border border-dark-border/50"
+              >
+                <div className="flex-1 text-sm text-gray-300 leading-relaxed">
+                  {inst.content}
+                </div>
+                <button
+                  onClick={() => handleDelete(inst.id)}
+                  disabled={isProcessing}
+                  className="flex-shrink-0 text-red-400 hover:text-red-300 text-xs px-2 py-1 rounded hover:bg-red-500/10 transition-colors"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-8 text-gray-500">
+            <p>No custom instructions yet.</p>
+            <p className="text-xs mt-1">Add instructions above to customize AI behavior.</p>
+          </div>
+        )}
       </div>
     </div>
   );

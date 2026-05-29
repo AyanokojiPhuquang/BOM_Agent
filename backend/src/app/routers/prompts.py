@@ -1,8 +1,10 @@
 """Prompt management router.
 
-Allows viewing and editing agent prompts via the UI.
+Supports viewing prompts and managing user behavioral instructions
+that get integrated into the system prompt via an Analyzer LLM.
 """
 
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -15,23 +17,32 @@ router = APIRouter(prefix="/prompts", tags=["prompts"])
 
 PROMPTS_DIR = Path("configs/prompts")
 PROMPTS_BACKUP_DIR = Path("configs/prompts_original")
+USER_INSTRUCTIONS_FILE = Path("data/user_instructions.json")
 
 
-class PromptItem(BaseModel):
-    path: str
-    name: str
-    category: str
+# --- Schemas ---
+
+
+class UserInstruction(BaseModel):
+    id: str
     content: str
-    has_original: bool = False
-    is_modified: bool = False
 
 
-class PromptListResponse(BaseModel):
-    prompts: list[PromptItem]
+class UserInstructionsResponse(BaseModel):
+    instructions: list[UserInstruction]
+    is_processing: bool = False
 
 
-class UpdatePromptRequest(BaseModel):
+class AddInstructionRequest(BaseModel):
     content: str
+
+
+class AddInstructionResponse(BaseModel):
+    instruction: UserInstruction
+    message: str
+
+
+# --- Helpers ---
 
 
 def _ensure_backups():
@@ -43,122 +54,145 @@ def _ensure_backups():
         shutil.copytree(PROMPTS_DIR, PROMPTS_BACKUP_DIR)
 
 
-def _get_original_content(relative_path: str) -> str | None:
-    """Get the original content of a prompt from backup."""
-    backup_file = PROMPTS_BACKUP_DIR / relative_path
-    if backup_file.exists():
-        return backup_file.read_text(encoding="utf-8")
-    return None
+def _load_instructions() -> list[dict]:
+    """Load user instructions from file."""
+    if USER_INSTRUCTIONS_FILE.exists():
+        return json.loads(USER_INSTRUCTIONS_FILE.read_text(encoding="utf-8"))
+    return []
+
+
+def _save_instructions(instructions: list[dict]):
+    """Save user instructions to file."""
+    USER_INSTRUCTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    USER_INSTRUCTIONS_FILE.write_text(
+        json.dumps(instructions, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _get_main_prompt_path() -> Path:
+    """Get the path to the main BOM assistant prompt."""
+    return PROMPTS_DIR / "agents" / "bom_assistant.md"
 
 
 # Create backups on module load
 _ensure_backups()
 
 
-@router.get("/", response_model=PromptListResponse)
-async def list_prompts(current_user: User = Depends(get_current_user)):
-    """List all available prompts."""
-    prompts = []
-    if PROMPTS_DIR.exists():
-        for md_file in sorted(PROMPTS_DIR.rglob("*.md")):
-            relative = md_file.relative_to(PROMPTS_DIR)
-            parts = relative.parts
-            category = parts[0] if len(parts) > 1 else "general"
-            content = md_file.read_text(encoding="utf-8")
-            original = _get_original_content(str(relative))
-            prompts.append(PromptItem(
-                path=str(relative),
-                name=md_file.stem,
-                category=category,
-                content=content,
-                has_original=original is not None,
-                is_modified=original is not None and content != original,
-            ))
-    return PromptListResponse(prompts=prompts)
+# --- Endpoints ---
 
 
-@router.get("/{prompt_path:path}", response_model=PromptItem)
-async def get_prompt(prompt_path: str, current_user: User = Depends(get_current_user)):
-    """Get a specific prompt by path."""
-    file_path = PROMPTS_DIR / prompt_path
-    if not file_path.exists() or not file_path.suffix == ".md":
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt not found")
-
-    relative = file_path.relative_to(PROMPTS_DIR)
-    parts = relative.parts
-    category = parts[0] if len(parts) > 1 else "general"
-    content = file_path.read_text(encoding="utf-8")
-    original = _get_original_content(str(relative))
-
-    return PromptItem(
-        path=str(relative),
-        name=file_path.stem,
-        category=category,
-        content=content,
-        has_original=original is not None,
-        is_modified=original is not None and content != original,
+@router.get("/instructions", response_model=UserInstructionsResponse)
+async def list_instructions(current_user: User = Depends(get_current_user)):
+    """List all active user instructions."""
+    instructions = _load_instructions()
+    return UserInstructionsResponse(
+        instructions=[UserInstruction(**i) for i in instructions],
     )
 
 
-@router.put("/{prompt_path:path}", response_model=PromptItem)
-async def update_prompt(
-    prompt_path: str,
-    request: UpdatePromptRequest,
+@router.post("/instructions", response_model=AddInstructionResponse)
+async def add_instruction(
+    request: AddInstructionRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Update a prompt's content."""
-    if ".." in prompt_path:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid path")
+    """Add a new behavioral instruction. The Analyzer LLM integrates it into the system prompt."""
+    from src.services.prompt_analyzer import analyze_and_update_prompt
+    import uuid
 
-    file_path = PROMPTS_DIR / prompt_path
-    if not file_path.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt not found")
+    if not request.content.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Instruction cannot be empty")
 
-    file_path.write_text(request.content, encoding="utf-8")
+    # Load current prompt
+    prompt_path = _get_main_prompt_path()
+    if not prompt_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="System prompt not found")
 
-    relative = file_path.relative_to(PROMPTS_DIR)
-    parts = relative.parts
-    category = parts[0] if len(parts) > 1 else "general"
-    original = _get_original_content(str(relative))
+    current_prompt = prompt_path.read_text(encoding="utf-8")
 
-    return PromptItem(
-        path=str(relative),
-        name=file_path.stem,
-        category=category,
-        content=request.content,
-        has_original=original is not None,
-        is_modified=original is not None and request.content != original,
+    # Use Analyzer LLM to integrate instruction
+    updated_prompt = await analyze_and_update_prompt(
+        current_prompt=current_prompt,
+        action="ADD",
+        instruction=request.content.strip(),
+    )
+
+    # Save updated prompt
+    prompt_path.write_text(updated_prompt, encoding="utf-8")
+
+    # Invalidate prompt cache so changes take effect immediately
+    from src.services.prompts.service import invalidate_prompt_cache
+    invalidate_prompt_cache()
+
+    # Save instruction to list
+    instruction_id = str(uuid.uuid4())[:8]
+    instructions = _load_instructions()
+    instructions.append({"id": instruction_id, "content": request.content.strip()})
+    _save_instructions(instructions)
+
+    return AddInstructionResponse(
+        instruction=UserInstruction(id=instruction_id, content=request.content.strip()),
+        message="Instruction added successfully",
     )
 
 
-@router.post("/{prompt_path:path}/revert", response_model=PromptItem)
-async def revert_prompt(
-    prompt_path: str,
+@router.delete("/instructions/{instruction_id}")
+async def delete_instruction(
+    instruction_id: str,
     current_user: User = Depends(get_current_user),
 ):
-    """Revert a prompt to its original content."""
-    if ".." in prompt_path:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid path")
+    """Remove a behavioral instruction. The Analyzer LLM removes it from the system prompt."""
+    from src.services.prompt_analyzer import analyze_and_update_prompt
 
-    original_content = _get_original_content(prompt_path)
-    if original_content is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No original backup found")
+    instructions = _load_instructions()
+    target = next((i for i in instructions if i["id"] == instruction_id), None)
 
-    file_path = PROMPTS_DIR / prompt_path
-    if not file_path.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt not found")
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instruction not found")
 
-    file_path.write_text(original_content, encoding="utf-8")
+    # Load current prompt
+    prompt_path = _get_main_prompt_path()
+    current_prompt = prompt_path.read_text(encoding="utf-8")
 
-    relative = file_path.relative_to(PROMPTS_DIR)
-    parts = relative.parts
-    category = parts[0] if len(parts) > 1 else "general"
-
-    return PromptItem(
-        path=str(relative),
-        name=file_path.stem,
-        category=category,
-        content=original_content,
-        has_original=True,
-        is_modified=False,
+    # Use Analyzer LLM to remove instruction
+    updated_prompt = await analyze_and_update_prompt(
+        current_prompt=current_prompt,
+        action="DELETE",
+        instruction=target["content"],
     )
+
+    # Save updated prompt
+    prompt_path.write_text(updated_prompt, encoding="utf-8")
+
+    # Invalidate prompt cache
+    from src.services.prompts.service import invalidate_prompt_cache
+    invalidate_prompt_cache()
+
+    # Remove from list
+    instructions = [i for i in instructions if i["id"] != instruction_id]
+    _save_instructions(instructions)
+
+    return {"message": "Instruction removed successfully"}
+
+
+@router.post("/reset")
+async def reset_prompt(current_user: User = Depends(get_current_user)):
+    """Reset the system prompt to its original version and clear all instructions."""
+    prompt_path = _get_main_prompt_path()
+    backup_path = PROMPTS_BACKUP_DIR / "agents" / "bom_assistant.md"
+
+    if not backup_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No backup found")
+
+    # Restore original
+    original = backup_path.read_text(encoding="utf-8")
+    prompt_path.write_text(original, encoding="utf-8")
+
+    # Invalidate prompt cache
+    from src.services.prompts.service import invalidate_prompt_cache
+    invalidate_prompt_cache()
+
+    # Clear instructions
+    _save_instructions([])
+
+    return {"message": "System prompt reset to original"}

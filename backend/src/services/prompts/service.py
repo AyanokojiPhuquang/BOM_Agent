@@ -142,3 +142,9 @@ def get_prompt_service(
     if _prompt_service is None:
         _prompt_service = PromptService(local_prompts_path=local_prompts_path)
     return _prompt_service
+
+
+def invalidate_prompt_cache():
+    """Invalidate the prompt service cache so prompts are reloaded from disk."""
+    global _prompt_service
+    _prompt_service = None

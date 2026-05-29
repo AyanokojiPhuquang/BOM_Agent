@@ -143,6 +143,42 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
               </a>
             );
           }
+          // Render PDF download links
+          if (href && (/\.pdf$/i.test(href) || href.includes('/api/datasheets/pdfs/'))) {
+            const cleanHref = href.replace(/^sandbox:/, '');
+            const downloadUrl = cleanHref.startsWith('/') ? cleanHref : `/${cleanHref}`;
+            return (
+              <a
+                href={downloadUrl}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const token = localStorage.getItem('starlink_token');
+                  fetch(downloadUrl, {
+                    headers: token ? { Authorization: `Bearer ${token}` } : {},
+                  })
+                    .then(res => {
+                      if (!res.ok) throw new Error('Download failed');
+                      return res.blob();
+                    })
+                    .then(blob => {
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = downloadUrl.split('/').pop() || 'document.pdf';
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    })
+                    .catch(() => {
+                      window.open(downloadUrl, '_blank');
+                    });
+                }}
+                className="text-blue-400 hover:text-blue-300 underline break-all cursor-pointer"
+              >
+                {children}
+              </a>
+            );
+          }
           return (
             <a href={href} className="text-blue-400 hover:text-blue-300 underline break-all" target="_blank" rel="noopener noreferrer">
               {children}
