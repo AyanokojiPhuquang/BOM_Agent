@@ -17,8 +17,8 @@ config.set_main_option("sqlalchemy.url", url)
 # Import all models so Alembic can detect them
 import src.db.models.users  # noqa: F401
 import src.db.models.conversations  # noqa: F401
-import src.db.models.nhanh  # noqa: F401
 import src.db.models.files  # noqa: F401
+import src.db.models.products  # noqa: F401
 
 target_metadata = SQLModel.metadata
 

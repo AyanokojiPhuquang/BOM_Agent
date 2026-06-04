@@ -28,23 +28,12 @@ class AuthConfig(BaseSettings):
     access_token_expire_minutes: int = 30
 
 
-class NhanhConfig(BaseSettings):
-    app_id: str = ""
-    secret_key: str = ""
-    redirect_url: str = "https://api-starlink.yitec.dev/api/nhanh/callback"
-    api_base_url: str = "https://pos.open.nhanh.vn"
-    api_version: str = "3.0"
-    webhooks_verify_token: str = "ilovestarlink"
-    proxy_url: str = "https://api-starlink.yitec.dev"
-
-
 class Settings(BaseSettings):
     env: str = "development"
     database: DatabaseConfig = DatabaseConfig()
     checkpoint_db_url: str = "postgresql://starlink:starlink@localhost:5432/starlink"
     auth: AuthConfig = AuthConfig()
     smtp: SMTPConfig = SMTPConfig()
-    nhanh: NhanhConfig = NhanhConfig()
     escalation_email: str = ""
     bom_recipient_email: str = ""
     openai_api_key: str = ""

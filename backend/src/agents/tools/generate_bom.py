@@ -1,13 +1,14 @@
 """BOM generation tool for the BOM assistant agent.
 
 This tool is called by the main conversational agent when it has gathered
-enough requirements from the user. It resolves product codes to datasheet
-files via the database, reads the actual product files from the catalog,
-then runs an LLM subagent to produce a structured BOM and renders the
-result as an Excel file.
+enough requirements from the user. It resolves product codes via the database
+(which contains structured specs extracted from uploaded PDFs), falls back to
+filesystem scan if needed, then runs an LLM subagent to produce a structured
+BOM and renders the result as an Excel file.
 """
 
 import asyncio
+import re
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -15,18 +16,14 @@ from loguru import logger
 
 from src.agents.tools.utils.email_templates import build_bom_email_body
 from src.agents.tools.utils.excel_renderer import render_bom_excel
-from src.agents.tools.inventory_checker import check_inventory
 from src.agents.tools.schemas import (
     BomProductItem,
     GenerateBomInput,
     GenerateBomOutput,
-    ProductInventoryStatus,
-    STATUS_LABELS,
 )
 from src.configs import SETTINGS
 from src.db.database import get_manual_db_session
-from src.db.models.nhanh import NhanhProduct
-from src.db.repositories.nhanh import NhanhProductRepository
+from src.db.models.products import Product
 from src.services.email_service import send_email
 from src.services.llms.models import llm_invoke
 from src.services.prompts.service import get_prompt_service
@@ -35,87 +32,78 @@ _OUTPUT_DIR = Path("data/generated_boms")
 _MODEL_NAME = "agents/bom_generator/default"
 _PROMPT_NAME = "tools.generate_bom"
 
-_STATUS_ICONS = {
-    "in_stock": "V",
-    "partial": "!",
-    "out_of_stock": "X",
-    "no_data": "?",
-    "error": "!",
-}
+
+def _normalize_code(code: str) -> str:
+    """Normalize a product code for comparison."""
+    return re.sub(r"[\s\-_]+", "", code).lower().strip()
 
 
-# --- Code → file path resolution ---
+# --- Code → product resolution ---
 
 
-async def _resolve_product_paths(
+async def _resolve_products(
     items: list[BomProductItem],
 ) -> list[dict]:
-    """Resolve product codes to datasheet file paths via the database.
+    """Resolve product codes to Product records from the database.
 
-    Tries exact match first, then partial/fuzzy match on product code.
+    Tries exact match first, then normalized/partial match.
+    Falls back to filesystem scan if DB has no match.
 
     Returns a list of dicts, one per item, with keys:
-        product_code, datasheet_path (or None), quantity, vendor,
-        device_model, notes, error (or None).
+        product_code, product (Product or None), datasheet_path (or None),
+        quantity, vendor, device_model, notes, error (or None).
     """
-    codes = [item.product_code for item in items]
+    from sqlalchemy import func
+    from sqlmodel import select
 
-    code_to_path: dict[str, str | None] = {}
-    all_products: list = []
+    codes = [item.product_code.strip() for item in items]
+    code_to_product: dict[str, Product] = {}
+
     try:
         async with get_manual_db_session() as session:
-            repo = NhanhProductRepository(session)
-            # Try exact match first
-            products = await repo.get_by_codes(codes)
-            for p in products:
-                code_to_path[p.code.strip().upper()] = p.datasheet_path
+            # Try exact match by code (case-insensitive)
+            normalized_codes = [c.upper() for c in codes]
+            result = await session.execute(
+                select(Product).where(func.upper(Product.code).in_(normalized_codes))
+            )
+            for p in result.scalars().all():
+                code_to_product[p.code.strip().upper()] = p
 
             # For codes not found, try partial match
-            unmatched = [c for c in codes if c.strip().upper() not in code_to_path]
+            unmatched = [c for c in codes if c.upper() not in code_to_product]
             if unmatched:
-                from sqlmodel import select
-                result = await session.execute(select(NhanhProduct).where(NhanhProduct.datasheet_path.isnot(None)))
-                all_products = result.scalars().all()
+                all_result = await session.execute(
+                    select(Product).where(Product.status == 1)
+                )
+                all_products = all_result.scalars().all()
 
                 for code in unmatched:
-                    key = code.strip().upper()
-                    # Normalize: remove spaces, special chars for comparison
-                    key_normalized = key.replace(" ", "").replace("-", "")
+                    key = code.upper()
+                    key_normalized = _normalize_code(code)
                     for p in all_products:
                         p_code = p.code.strip().upper()
-                        p_normalized = p_code.replace(" ", "").replace("-", "")
-                        # Match if one contains the other, or normalized versions match
+                        p_normalized = _normalize_code(p.code)
                         if (p_code in key or key in p_code or
-                            p_normalized in key_normalized or key_normalized in p_normalized):
-                            code_to_path[key] = p.datasheet_path
+                            p_normalized == key_normalized or
+                            p_normalized in key_normalized or
+                            key_normalized in p_normalized):
+                            code_to_product[key] = p
                             break
-                    # If still not found, try searching in datasheet file content
-                    if key not in code_to_path:
-                        datasheets_dir = Path(SETTINGS.datasheets_dir).resolve()
-                        for p in all_products:
-                            if not p.datasheet_path:
-                                continue
-                            md_path = datasheets_dir / p.datasheet_path
-                            if md_path.exists():
-                                try:
-                                    content = md_path.read_text(encoding="utf-8")
-                                    # Search for the product code in file content
-                                    if code.strip() in content or code.strip().replace(" ", "") in content:
-                                        code_to_path[key] = p.datasheet_path
-                                        break
-                                except Exception:
-                                    pass
     except Exception as e:
         logger.warning(f"DB lookup for product codes failed: {e}")
 
+    # Build results
     results = []
+    datasheets_dir = Path(SETTINGS.datasheets_dir).resolve()
+
     for item in items:
         key = item.product_code.strip().upper()
-        path = code_to_path.get(key)
+        product = code_to_product.get(key)
 
         entry = {
             "product_code": item.product_code,
-            "datasheet_path": path,
+            "product": product,
+            "datasheet_path": product.datasheet_path if product else None,
             "quantity": item.quantity,
             "vendor": item.vendor,
             "device_model": item.device_model,
@@ -123,27 +111,83 @@ async def _resolve_product_paths(
             "error": None,
         }
 
-        if key not in code_to_path:
-            entry["error"] = (
-                f"Product code '{item.product_code}' not found in our database. "
-                "Please verify the product code and try again."
-            )
-        elif not path:
-            entry["error"] = (
-                f"Product code '{item.product_code}' exists in our system but has no "
-                "datasheet linked. The BOM may be missing detailed specs for this item."
-            )
+        # If not found in DB, try filesystem scan as fallback
+        if not product:
+            path = _find_in_filesystem(item.product_code, datasheets_dir)
+            if path:
+                entry["datasheet_path"] = path
+            else:
+                entry["error"] = (
+                    f"Product code '{item.product_code}' not found in the catalog. "
+                    "Please verify the product code and try again."
+                )
 
         results.append(entry)
 
     return results
 
 
-# --- File reading ---
+def _find_in_filesystem(code: str, datasheets_dir: Path) -> str | None:
+    """Fallback: scan filesystem for a matching product folder."""
+    if not datasheets_dir.exists():
+        return None
+
+    normalized = _normalize_code(code)
+
+    for md_file in datasheets_dir.rglob("*.md"):
+        relative = md_file.relative_to(datasheets_dir)
+        if len(relative.parts) < 2:
+            continue
+        folder_name = relative.parts[-2]
+        if (_normalize_code(folder_name) == normalized or
+            folder_name.strip().lower() == code.strip().lower()):
+            return str(relative)
+
+    # Try content search
+    for md_file in datasheets_dir.rglob("*.md"):
+        try:
+            content = md_file.read_text(encoding="utf-8")
+            if code in content or code.replace(" ", "") in content:
+                return str(md_file.relative_to(datasheets_dir))
+        except Exception:
+            pass
+
+    return None
+
+
+# --- Build product info for LLM ---
+
+
+def _format_product_specs(product: Product) -> str:
+    """Format a Product's specs as readable text for the LLM."""
+    lines = []
+    if product.brand:
+        lines.append(f"Brand: {product.brand}")
+    if product.description:
+        lines.append(f"Description: {product.description}")
+    if product.data_rate:
+        lines.append(f"Data Rate: {product.data_rate}")
+    if product.fiber_type:
+        lines.append(f"Fiber Type: {product.fiber_type}")
+    if product.wavelength:
+        lines.append(f"Wavelength: {product.wavelength}")
+    if product.max_distance:
+        lines.append(f"Max Distance: {product.max_distance}")
+    if product.connector:
+        lines.append(f"Connector: {product.connector}")
+    if product.main_device:
+        lines.append(f"Main Device (thiết bị chính): {product.main_device}")
+    if product.category:
+        lines.append(f"Category: {product.category}")
+    if product.raw_specs:
+        lines.append(f"Additional Specs: {product.raw_specs}")
+    return "\n".join(lines)
 
 
 async def _read_product_file(resolved_item: dict, datasheets_dir: str) -> dict:
-    """Read a single product file and return its content with item metadata."""
+    """Build product info from the Products DB (user-edited data is the source of truth)."""
+    product: Product | None = resolved_item["product"]
+
     result = {
         "product_code": resolved_item["product_code"],
         "quantity": resolved_item["quantity"],
@@ -157,20 +201,22 @@ async def _read_product_file(resolved_item: dict, datasheets_dir: str) -> dict:
     if result["error"]:
         return result
 
-    relative_path = resolved_item["datasheet_path"].lstrip("/")
-    full_path = Path(datasheets_dir) / relative_path
-
-    try:
-        result["product_content"] = full_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        result["error"] = (
-            f"Datasheet file not found for product '{resolved_item['product_code']}'. "
-            "The file may have been moved or deleted."
-        )
-        logger.warning(result["error"])
-    except Exception as e:
-        result["error"] = f"Error reading datasheet for {resolved_item['product_code']}: {e}"
-        logger.error(result["error"])
+    # Product exists in DB — use structured specs directly (this is user-edited truth)
+    if product:
+        result["product_content"] = _format_product_specs(product)
+    elif resolved_item["datasheet_path"]:
+        # Fallback: no DB record but has a datasheet file path
+        relative_path = resolved_item["datasheet_path"].lstrip("/")
+        full_path = Path(datasheets_dir) / relative_path
+        try:
+            result["product_content"] = full_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            result["error"] = (
+                f"Datasheet file not found for product '{resolved_item['product_code']}'. "
+                "The file may have been moved or deleted."
+            )
+        except Exception as e:
+            result["error"] = f"Error reading datasheet for {resolved_item['product_code']}: {e}"
 
     return result
 
@@ -232,13 +278,10 @@ async def _invoke_bom_subagent(user_prompt: str) -> GenerateBomOutput:
 # --- Excel + download ---
 
 
-def _generate_excel(
-    bom: GenerateBomOutput,
-    inventory_statuses: list[ProductInventoryStatus],
-) -> Path | None:
+def _generate_excel(bom: GenerateBomOutput) -> Path | None:
     """Render BOM to Excel. Returns filepath or None on error."""
     try:
-        return render_bom_excel(bom, _OUTPUT_DIR, inventory_statuses=inventory_statuses)
+        return render_bom_excel(bom, _OUTPUT_DIR)
     except Exception as e:
         logger.error(f"Excel generation error: {e}")
         return None
@@ -303,38 +346,13 @@ def _format_bom_summary(bom: GenerateBomOutput) -> str:
     return "\n".join(lines)
 
 
-def _format_inventory_status(statuses: list[ProductInventoryStatus]) -> str:
-    """Format inventory statuses as a markdown table."""
-    if not statuses:
-        return ""
-
-    lines = ["\n## Inventory Status\n"]
-    lines.append("| Product | Requested | Available | In Stock | Status |")
-    lines.append("|---------|-----------|-----------|----------|--------|")
-
-    for s in statuses:
-        name = s.nhanh_product_name or s.product_code
-        label = STATUS_LABELS.get(s.status_label, s.status_label)
-        if s.status_label == "partial":
-            label = f"Partial (need {s.quantity_requested}, have {s.available})"
-        icon = _STATUS_ICONS.get(s.status_label, "?")
-        lines.append(f"| {name} | {s.quantity_requested} | {s.available} | {s.remain} | {icon} {label} |")
-
-    return "\n".join(lines)
-
-
 def _build_tool_response(
     bom: GenerateBomOutput,
-    inventory_statuses: list[ProductInventoryStatus],
     email_sent: bool,
     filepath: Path | None = None,
 ) -> str:
     """Assemble the final tool response from all parts."""
     parts = [_format_bom_summary(bom)]
-
-    inventory_section = _format_inventory_status(inventory_statuses)
-    if inventory_section:
-        parts.append(inventory_section)
 
     if filepath:
         filename = filepath.name
@@ -367,7 +385,7 @@ async def generate_bom(
                and optionally device_model and notes.
 
     Returns:
-        BOM summary with line items, download link, and inventory status,
+        BOM summary with line items and download link,
         or validation issues if something is wrong.
     """
 
@@ -377,16 +395,15 @@ async def generate_bom(
         items=items,
     )
 
-    # 1. Resolve product codes to file paths via database
-    resolved_items = await _resolve_product_paths(bom_input.items)
+    # 1. Resolve product codes via database + filesystem fallback
+    resolved_items = await _resolve_products(bom_input.items)
 
     # Check if ALL codes failed to resolve — still proceed but note the errors
-    not_found = [r for r in resolved_items if r["error"] and "not found in our database" in r["error"]]
+    not_found = [r for r in resolved_items if r["error"] and "not found" in r["error"]]
     if not_found and len(not_found) == len(resolved_items):
-        # All products not found — still create BOM with available info
-        logger.info(f"No products found in DB, proceeding with raw info: {[r['product_code'] for r in resolved_items]}")
+        logger.info(f"No products found in catalog, proceeding with raw info: {[r['product_code'] for r in resolved_items]}")
 
-    # 2. Read product files
+    # 2. Read product specs (from DB structured data + markdown files)
     items_with_content = await _read_all_product_files(resolved_items)
 
     # 3. Call LLM subagent
@@ -398,23 +415,17 @@ async def generate_bom(
         return f"Error generating BOM: {e}. Please try again."
 
     if not bom_output.is_valid and not bom_output.line_items:
-        # Only block if there are NO line items at all
         return _format_validation_issues(bom_output)
 
-    # 4. Check inventory
-    codes = [item.product_code for item in bom_input.items]
-    quantities = [item.quantity for item in bom_input.items]
-    inventory_statuses = await check_inventory(codes, quantities)
-
-    # 5. Inject customer info into BOM output for downstream use
+    # 4. Inject customer info into BOM output
     bom_output.customer_name = bom_input.customer_name
     bom_output.customer_phone = bom_input.customer_phone
 
-    # 6. Generate Excel
-    filepath = _generate_excel(bom_output, inventory_statuses)
+    # 5. Generate Excel
+    filepath = _generate_excel(bom_output)
 
-    # 7. Send email
+    # 6. Send email
     email_sent = await _send_bom_email(bom_output, filepath)
 
-    # 8. Build response
-    return _build_tool_response(bom_output, inventory_statuses, email_sent, filepath)
+    # 7. Build response
+    return _build_tool_response(bom_output, email_sent, filepath)

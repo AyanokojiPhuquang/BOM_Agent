@@ -17,6 +17,7 @@ product records in the database so the BOM agent can reference them.
 """
 
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -26,7 +27,7 @@ from pydantic import BaseModel
 from src.app.auth import get_current_user
 from src.configs import SETTINGS
 from src.db.database import get_manual_db_session
-from src.db.models.nhanh import NhanhProduct
+from src.db.models.products import Product
 from src.db.models.users import User
 from sqlmodel import select
 
@@ -90,7 +91,7 @@ def _scan_datasheets_dir(datasheets_dir: Path) -> list[dict]:
 
 
 async def _sync_products_from_datasheets(products: list[dict]) -> tuple[int, int]:
-    """Create or update NhanhProduct records from scanned datasheets.
+    """Create or update Product records from scanned datasheets.
 
     Returns (created_count, updated_count).
     """
@@ -99,41 +100,57 @@ async def _sync_products_from_datasheets(products: list[dict]) -> tuple[int, int
 
     async with get_manual_db_session() as session:
         # Get all existing products by code
-        existing_codes = {}
-        result = await session.execute(select(NhanhProduct))
+        existing_codes: dict[str, Product] = {}
+        result = await session.execute(select(Product))
         for p in result.scalars().all():
             existing_codes[p.code.strip().upper()] = p
-
-        # Find the max nhanh_id to generate new ones
-        max_nhanh_id = max(
-            (p.nhanh_id for p in existing_codes.values()),
-            default=40000000,
-        )
 
         for product_info in products:
             code = product_info["code"].strip()
             key = code.upper()
-            datasheet_path = product_info["datasheet_path"]
+            datasheet_path = product_info.get("datasheet_path", "")
+            category = product_info.get("category", "")
 
             if key in existing_codes:
-                # Update datasheet_path if changed
+                # Update fields
                 existing = existing_codes[key]
-                if existing.datasheet_path != datasheet_path:
+                changed = False
+                if datasheet_path and existing.datasheet_path != datasheet_path:
                     existing.datasheet_path = datasheet_path
+                    changed = True
+                if category and existing.category != category:
+                    existing.category = category
+                    changed = True
+                # Update spec fields if provided
+                for field in ("name", "brand", "description", "data_rate",
+                              "fiber_type", "wavelength", "max_distance",
+                              "connector", "main_device", "raw_specs", "pdf_url"):
+                    new_val = product_info.get(field, "")
+                    if new_val and getattr(existing, field, "") != new_val:
+                        setattr(existing, field, new_val)
+                        changed = True
+                if changed:
+                    existing.updated_at = datetime.now(timezone.utc)
                     session.add(existing)
                     updated += 1
             else:
                 # Create new product
-                max_nhanh_id += 1
-                new_product = NhanhProduct(
-                    nhanh_id=max_nhanh_id,
-                    name=code,
+                new_product = Product(
                     code=code,
+                    name=product_info.get("name", code),
+                    brand=product_info.get("brand", ""),
+                    description=product_info.get("description", ""),
+                    data_rate=product_info.get("data_rate", ""),
+                    fiber_type=product_info.get("fiber_type", ""),
+                    wavelength=product_info.get("wavelength", ""),
+                    max_distance=product_info.get("max_distance", ""),
+                    connector=product_info.get("connector", ""),
+                    main_device=product_info.get("main_device", ""),
+                    category=category,
                     datasheet_path=datasheet_path,
+                    pdf_url=product_info.get("pdf_url", ""),
+                    raw_specs=product_info.get("raw_specs", ""),
                     status=1,
-                    remain=0,
-                    available=0,
-                    price=0,
                 )
                 session.add(new_product)
                 existing_codes[key] = new_product
@@ -290,7 +307,7 @@ async def delete_all_datasheets(
     deleted_products = 0
     async with get_manual_db_session() as session:
         result = await session.execute(
-            select(NhanhProduct).where(NhanhProduct.datasheet_path.isnot(None))
+            select(Product).where(Product.datasheet_path.isnot(None))
         )
         products = result.scalars().all()
         for p in products:
@@ -390,7 +407,7 @@ async def delete_product(
     # Delete DB record
     async with get_manual_db_session() as session:
         result = await session.execute(
-            select(NhanhProduct).where(NhanhProduct.code == product_code)
+            select(Product).where(Product.code == product_code)
         )
         db_product = result.scalars().first()
         if db_product:
@@ -421,8 +438,8 @@ async def upload_pdf_datasheets(
     """Upload PDF files containing product datasheets.
 
     Each PDF is converted to markdown and stored in the datasheets directory.
-    LLM extracts all product codes from the content, creating a DB record
-    for each so the BOM agent can find them.
+    LLM extracts all product codes AND their technical specifications,
+    creating a full DB record for each product found.
 
     Args:
         files: One or more PDF files
@@ -431,7 +448,7 @@ async def upload_pdf_datasheets(
     from src.services.pdf_converter import (
         pdf_to_markdown,
         extract_product_code_from_filename,
-        extract_product_codes_from_content,
+        extract_product_specs_from_content,
     )
 
     if not files:
@@ -461,36 +478,49 @@ async def upload_pdf_datasheets(
             product_dir = datasheets_dir / category / folder_code
             product_dir.mkdir(parents=True, exist_ok=True)
 
-            # Save PDF temporarily and convert
+            # Save PDF and convert to markdown
             temp_pdf = product_dir / filename
             content = await file.read()
             with open(temp_pdf, "wb") as f:
                 f.write(content)
 
-            # Convert PDF to markdown
             md_path = pdf_to_markdown(temp_pdf, product_dir)
 
-            # Keep the original PDF for download
-
-            # Extract product codes using LLM
+            # Extract structured product specs using LLM
             md_content = md_path.read_text(encoding="utf-8")
-            codes = await extract_product_codes_from_content(md_content, filename)
+            specs = await extract_product_specs_from_content(md_content, filename)
 
-            # If LLM returns nothing, fallback to filename
-            if not codes:
-                codes = [folder_code]
+            # If LLM returns nothing, fallback to filename-based entry
+            if not specs:
+                from src.services.pdf_converter import ExtractedProductSpec
+                specs = [ExtractedProductSpec(code=folder_code)]
 
-            # Create product records for each extracted code
+            # Create product records for each extracted product
             relative_path = str(md_path.relative_to(datasheets_dir))
-            for code in codes:
+            # Compute the PDF download URL (relative to datasheets static mount)
+            pdf_relative_path = str(temp_pdf.relative_to(datasheets_dir))
+            pdf_download_url = f"/api/datasheets/pdfs/{pdf_relative_path}"
+
+            for spec in specs:
                 all_new_products.append({
-                    "code": code,
+                    "code": spec.code,
+                    "name": spec.name or spec.code,
+                    "brand": spec.brand,
+                    "description": spec.description,
+                    "data_rate": spec.data_rate,
+                    "fiber_type": spec.fiber_type,
+                    "wavelength": spec.wavelength,
+                    "max_distance": spec.max_distance,
+                    "connector": spec.connector,
+                    "main_device": "N/A",
+                    "category": spec.category or category,
                     "datasheet_path": relative_path,
-                    "category": category,
+                    "pdf_url": pdf_download_url,
+                    "raw_specs": spec.raw_specs,
                 })
 
             processed += 1
-            logger.info(f"Processed PDF: {filename} -> {len(codes)} products: {codes}")
+            logger.info(f"Processed PDF: {filename} -> {len(specs)} products: {[s.code for s in specs]}")
 
         except Exception as e:
             errors.append(f"Failed to process {filename}: {str(e)}")
@@ -593,7 +623,7 @@ async def delete_pdf(
     if not full_path.exists() or not full_path.suffix == ".pdf":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PDF not found")
 
-    # The PDF sits in a product folder (e.g. datasheets/Eltex/MES24xx/file.pdf)
+    # The PDF sits in a product folder (e.g. datasheets/PDF/MES24xx/file.pdf)
     product_folder = full_path.parent
     # Get the relative path of the markdown file to match DB records
     md_files = list(product_folder.glob("*.md"))
@@ -605,7 +635,7 @@ async def delete_pdf(
         async with get_manual_db_session() as session:
             for md_path in md_relative_paths:
                 result = await session.execute(
-                    select(NhanhProduct).where(NhanhProduct.datasheet_path == md_path)
+                    select(Product).where(Product.datasheet_path == md_path)
                 )
                 for p in result.scalars().all():
                     await session.delete(p)

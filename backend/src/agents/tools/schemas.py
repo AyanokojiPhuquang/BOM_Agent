@@ -53,7 +53,7 @@ class BomLineItem(BaseModel):
     sku: str = Field(description="Starview or ModuleTek part number")
     brand: str = Field(description="Product brand: Starview or ModuleTek")
     description: str = Field(description="Product description")
-    vendor_compatibility: str = Field(description="Target vendor this transceiver is coded for")
+    vendor_compatibility: str = Field(description="Main device / equipment that this product is designed for or compatible with (thiết bị chính). E.g. Cisco Catalyst, Juniper EX, Eltex MES, or 'N/A' if universal")
     data_rate: str = Field(description="Data rate, e.g. 10G")
     fiber_type: str = Field(description="single-mode or multi-mode")
     wavelength: str | None = Field(default=None, description="Wavelength, e.g. 850nm, 1310nm")
@@ -76,39 +76,6 @@ class GenerateBomOutput(BaseModel):
     summary: str = Field(description="Human-readable summary of the BOM")
 
 
-# --- Inventory Tool Input Schema ---
-
-
-class CheckInventoryInput(BaseModel):
-    """Input schema for the check_inventory tool."""
-
-    product_code: str = Field(
-        description="Product code, e.g. SFP-10G-ER, SFP-10G-ZR-I. "
-        "This is the product model/part number.",
-    )
-    quantity: int = Field(default=1, description="Number of units to check availability for")
-
-
-# --- Inventory Status Schema ---
-
-
-class ProductInventoryStatus(BaseModel):
-    """Real-time inventory status for a BOM line item."""
-
-    product_code: str = Field(description="Product code")
-    nhanh_product_name: str | None = Field(default=None, description="Product name in Nhanh")
-    nhanh_id: int | None = Field(default=None, description="Nhanh product ID")
-    quantity_requested: int = Field(description="Quantity requested in BOM")
-    available: int = Field(default=0, description="Available stock from Nhanh API")
-    remain: int = Field(default=0, description="Total remaining stock from Nhanh API")
-    is_sufficient: bool = Field(default=False, description="True if available >= quantity_requested")
-    status_label: str = Field(
-        default="no_data",
-        description="in_stock | partial | out_of_stock | no_data | error",
-    )
-    error_message: str | None = Field(default=None, description="Error details when status is 'error'")
-
-
 # --- Escalation Schemas ---
 
 
@@ -129,16 +96,3 @@ class EscalateInput(BaseModel):
     reason: str = Field(description="Brief explanation of why this conversation is being escalated")
     category: EscalationCategory = Field(description="Escalation category")
     conversation_summary: str = Field(description="Summary of the conversation so far, including what the customer needs")
-
-
-# --- Shared constants ---
-
-STATUS_LABELS: dict[str, str] = {
-    "in_stock": "In Stock",
-    "partial": "Partial",
-    "out_of_stock": "Out of Stock",
-    "no_data": "No Data",
-    "error": "Error",
-}
-
-

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from src.agents.tools.escalate_to_human import escalate_to_human
 from src.agents.tools.generate_bom import generate_bom
-from src.agents.tools.inventory_checker import check_product_inventory
+from src.agents.tools.get_datasheet import get_datasheet_link
 from src.agents.tools.list_datasheets import list_uploaded_datasheets
 
 
@@ -32,7 +32,7 @@ AGENT_REGISTRY: dict[str, AgentDefinition] = {
     "bom_assistant": AgentDefinition(
         prompt="agents.bom_assistant",
         model="agents/bom_assistant/default",
-        tools=[generate_bom, escalate_to_human, check_product_inventory, list_uploaded_datasheets],
+        tools=[generate_bom, escalate_to_human, get_datasheet_link, list_uploaded_datasheets],
     ),
 }
 

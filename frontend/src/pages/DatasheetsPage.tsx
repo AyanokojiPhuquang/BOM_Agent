@@ -221,7 +221,6 @@ export function DatasheetsContent() {
         <h3 className="text-lg font-semibold text-white mb-4">Upload PDF Datasheets</h3>
         <p className="text-sm text-gray-400 mb-4">
           Upload PDF files containing product specifications. They will be converted to markdown automatically.
-          Products not found in Nhanh.vn will still be available for BOM generation (marked as "no inventory data").
         </p>
 
         <div className="flex items-center gap-4 flex-wrap">

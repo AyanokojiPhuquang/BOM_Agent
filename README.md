@@ -1,264 +1,339 @@
-# Starlink
+# Starlinks BOM Assistant
 
-FastAPI backend + React (Vite) frontend + Postgres. Ships with Docker Compose
-for both dev (hot-reload) and prod.
+Hệ thống tạo BOM (Bill of Materials) tự động cho thiết bị viễn thông, sử dụng AI chatbot để tư vấn và tạo báo giá.
 
 ## Stack
 
-- **backend/** – Python 3.11, FastAPI, SQLAlchemy (async), Alembic, uv
-- **frontend/** – React + Vite + TypeScript, served by nginx in prod
-- **postgres** – 16-alpine, with a separate checkpoint DB for the BOM agent
+- **Backend** — Python 3.11, FastAPI, SQLAlchemy (async), PostgreSQL, LangChain/LangGraph
+- **Frontend** — React 19, Vite, TypeScript, Tailwind CSS v4
+- **Database** — PostgreSQL 16
+- **AI** — OpenAI-compatible LLM (OpenRouter, Azure, v.v.)
+- **Deploy** — Docker Compose (dev + prod)
 
-## Prerequisites
+## Kiến trúc hệ thống
 
-- Docker + Docker Compose v2 (`docker compose` CLI)
-- That's it. Python / Node are only needed if you want to run without Docker.
+```
+┌─────────────┐     ┌──────────────┐     ┌────────────┐
+│  Frontend   │────▶│   Backend    │────▶│  PostgreSQL │
+│  React/Vite │     │   FastAPI    │     │            │
+│  :5173      │     │   :8030      │     │   :5437    │
+└─────────────┘     └──────┬───────┘     └────────────┘
+                           │
+                           ▼
+                    ┌──────────────┐
+                    │  LLM (OpenAI │
+                    │  /OpenRouter)│
+                    └──────────────┘
+```
 
-## Quick start (Docker)
+## Chức năng chính
+
+### 1. Chat AI tư vấn sản phẩm
+- Chatbot bán hàng thông minh, hỗ trợ tiếng Việt
+- Tìm kiếm sản phẩm từ catalog (datasheets đã upload)
+- Tư vấn module quang, switch, media converter theo yêu cầu khách
+
+### 2. Tạo BOM tự động
+- Thu thập yêu cầu qua hội thoại → tự động tạo BOM
+- Lấy thông số kỹ thuật trực tiếp từ database Products
+- Xuất file Excel (.xlsx) có format chuyên nghiệp
+- Gửi email BOM cho đội ngũ nội bộ
+
+### 3. Quản lý Product Catalog (tab Products)
+- Data table hiển thị tất cả sản phẩm đã trích xuất
+- Inline editing — click vào cell để sửa trực tiếp
+- Bulk save — lưu nhiều thay đổi cùng lúc
+- Tìm kiếm, phân trang
+- Nút "Sync từ Excel" — đồng bộ mô tả từ dữ liệu Excel Refs
+
+### 4. Upload & Extract PDF Datasheets (tab Datasheets)
+- Upload file PDF datasheet sản phẩm
+- Tự động extract text bằng pdfplumber
+- AI trích xuất mã sản phẩm + thông số kỹ thuật
+- Lưu vào database Products cho BOM sử dụng
+
+### 5. Excel Reference Files (tab Excel Refs)
+- Upload file Excel chứa P/N + Description chuẩn
+- Hiển thị bảng — cho phép inline edit
+- Dữ liệu dùng để sync/ghi đè description ở tab Products
+
+### 6. Tra cứu Datasheet
+- Khách hàng hỏi "cho tôi datasheet mã XYZ" → bot trả link download PDF
+- API lookup hỗ trợ truy vấn nhiều mã cùng lúc, deduplicate
+
+### 7. Quản lý người dùng & Prompts
+- CRUD users với role-based access (admin/user)
+- Chỉnh sửa system prompts cho AI agent
+
+## Quick Start (Docker)
+
+### Yêu cầu
+- Docker + Docker Compose v2
+
+### Khởi chạy
 
 ```bash
-# 1. Clone and enter the repo
-cd starlink
+# 1. Clone repo
+git clone <repo-url> && cd starlinks
 
-# 2. Create the backend env file from the example
+# 2. Tạo file env
 cp backend/.env.example backend/.env.docker
-# then edit backend/.env.docker and fill in secrets
-# (OPENAI_API_KEY, SMTP creds, Langfuse keys, Nhanh keys, etc.)
+# Chỉnh sửa backend/.env.docker — ít nhất cần OPENAI_API_KEY
 
-# 3. Drop the product datasheets into backend/data/datasheets/
-#    (see "Datasheets" section below)
-
-# 4. Start everything
+# 3. Khởi chạy
 docker compose -f docker-compose.dev.yml up --build
 
-# With hot-reload file watching:
+# 4. (Lần đầu) Chạy migration
+docker compose -f docker-compose.dev.yml exec backend uv run alembic upgrade head
+```
+
+### Truy cập
+
+| Service | URL | Ghi chú |
+|---------|-----|---------|
+| Frontend | http://localhost:5173 | Giao diện chính |
+| Backend API | http://localhost:8030 | Swagger docs tại `/docs` |
+| PostgreSQL | localhost:5437 | user/pass/db: `starlink` |
+
+### Tài khoản mặc định
+
+```
+Email:    demo@starlink.chat
+Password: password
+Role:     admin
+```
+
+## Cấu hình (Environment Variables)
+
+Tất cả config nằm trong `backend/.env.docker`. Các biến quan trọng:
+
+| Biến | Mô tả | Mặc định |
+|------|--------|----------|
+| `DATABASE__URL` | PostgreSQL connection string | `postgresql+asyncpg://starlink:starlink@postgres:5432/starlink` |
+| `OPENAI_API_KEY` | API key cho LLM | (bắt buộc) |
+| `OPENAI_API_BASE_URL` | Base URL cho LLM API | `https://api.openai.com/v1` |
+| `AUTH__JWT_SECRET_KEY` | Secret key cho JWT | `change-me-in-production` |
+| `CORS_ORIGINS` | Allowed frontend origins | `http://localhost:5173` |
+| `DATASHEETS_DIR` | Thư mục lưu datasheets | `data/datasheets` |
+| `SMTP__SERVER` | SMTP server cho email | |
+| `SMTP__USERNAME` | SMTP username | |
+| `SMTP__PASSWORD` | SMTP password | |
+| `BOM_RECIPIENT_EMAIL` | Email nhận BOM | |
+| `ESCALATION_EMAIL` | Email nhận escalation | |
+| `LANGFUSE_*` | Langfuse tracing (optional) | |
+
+## Luồng dữ liệu
+
+### Upload PDF → Products
+
+```
+PDF File
+  │
+  ▼ pdfplumber (text extraction)
+Markdown (.md)
+  │
+  ▼ LLM (extract product codes + specs)
+Database (products table)
+  │
+  ├── code, brand, data_rate, fiber_type, wavelength,
+  │   max_distance, connector, main_device, category
+  │
+  └── pdf_url (link download PDF gốc)
+```
+
+### Tạo BOM
+
+```
+Customer yêu cầu qua chat
+  │
+  ▼ Agent thu thập: product_code, quantity, customer_name, phone
+  │
+  ▼ generate_bom tool
+  │
+  ├── 1. Tìm product trong DB (exact match by code)
+  ├── 2. Lấy structured specs từ DB (user-edited = source of truth)
+  ├── 3. Gửi specs cho LLM subagent → structured BOM output
+  ├── 4. Render Excel (.xlsx)
+  └── 5. Gửi email + trả response
+```
+
+### Sync Excel Refs → Products
+
+```
+Upload Excel (tab Excel Refs)
+  │
+  ▼ Parse cột P/N + Descriptions
+  │
+  ▼ Lưu vào bảng excel_product_refs
+  │
+  ▼ Nhấn "Sync từ Excel" (tab Products)
+  │
+  ▼ Match P/N với product.code → ghi đè description
+```
+
+## Database Schema
+
+### products
+| Column | Type | Mô tả |
+|--------|------|--------|
+| id | UUID | Primary key |
+| code | VARCHAR | Mã sản phẩm (indexed) |
+| name | VARCHAR | Tên đầy đủ |
+| brand | VARCHAR | Nhà sản xuất |
+| description | TEXT | Mô tả (có thể sync từ Excel) |
+| data_rate | VARCHAR | Tốc độ (1G, 10G, 100G) |
+| fiber_type | VARCHAR | single-mode / multi-mode / copper / N/A |
+| wavelength | VARCHAR | Bước sóng (1310nm, 850nm, N/A) |
+| max_distance | VARCHAR | Khoảng cách tối đa |
+| connector | VARCHAR | Đầu nối (LC, SC, RJ-45, MPO) |
+| main_device | VARCHAR | Thiết bị chính tương thích |
+| category | VARCHAR | Loại SP (SFP, QSFP, Switch, ...) |
+| datasheet_path | VARCHAR | Đường dẫn file markdown |
+| pdf_url | VARCHAR | URL download PDF gốc |
+| raw_specs | TEXT | Thông số bổ sung |
+
+### excel_files
+| Column | Type | Mô tả |
+|--------|------|--------|
+| id | UUID | Primary key |
+| filename | VARCHAR | Tên file gốc |
+| file_size | INT | Dung lượng (bytes) |
+| total_rows | INT | Số dòng dữ liệu |
+
+### excel_product_refs
+| Column | Type | Mô tả |
+|--------|------|--------|
+| id | UUID | Primary key |
+| excel_file_id | UUID | FK → excel_files |
+| product_code | VARCHAR | Mã sản phẩm (P/N) |
+| description | TEXT | Mô tả chuẩn |
+
+## API Endpoints
+
+### Auth
+| Method | Path | Mô tả |
+|--------|------|--------|
+| POST | `/api/auth/login` | Đăng nhập |
+| POST | `/api/auth/logout` | Đăng xuất |
+| GET | `/api/auth/me` | Thông tin user hiện tại |
+
+### Chat
+| Method | Path | Mô tả |
+|--------|------|--------|
+| POST | `/api/chat/completions` | Gửi tin nhắn + streaming response |
+| POST | `/api/chat/completions/{id}/stop` | Dừng generation |
+
+### Products
+| Method | Path | Mô tả |
+|--------|------|--------|
+| GET | `/api/products/` | List products (search, filter, paginate) |
+| PATCH | `/api/products/{id}` | Update 1 product |
+| DELETE | `/api/products/{id}` | Xóa product |
+| POST | `/api/products/bulk-update` | Bulk update |
+| POST | `/api/products/sync-excel` | Sync descriptions từ Excel Refs |
+| POST | `/api/products/upload-excel` | Upload + parse Excel file |
+| POST | `/api/products/datasheets-lookup` | Tra cứu PDF URL theo mã SP |
+
+### Excel Files
+| Method | Path | Mô tả |
+|--------|------|--------|
+| GET | `/api/products/excel-files` | List file Excel đã upload |
+| GET | `/api/products/excel-files/{id}` | Chi tiết file + mappings |
+| PATCH | `/api/products/excel-files/{id}` | Cập nhật mappings |
+| DELETE | `/api/products/excel-files/{id}` | Xóa file + mappings |
+
+### Datasheets
+| Method | Path | Mô tả |
+|--------|------|--------|
+| POST | `/api/datasheets/upload` | Upload folder datasheets |
+| POST | `/api/datasheets/upload-pdf` | Upload PDF datasheets |
+| GET | `/api/datasheets/` | List datasheets |
+| DELETE | `/api/datasheets/` | Xóa tất cả |
+| GET | `/api/datasheets/pdfs` | List PDF files |
+| GET | `/api/datasheets/pdfs/{path}` | Download PDF |
+
+### BOMs
+| Method | Path | Mô tả |
+|--------|------|--------|
+| GET | `/api/boms/` | List BOM files đã tạo |
+| DELETE | `/api/boms/{filename}` | Xóa file BOM |
+
+### Users (Admin only)
+| Method | Path | Mô tả |
+|--------|------|--------|
+| GET | `/api/users` | List users |
+| POST | `/api/users` | Tạo user |
+| PUT | `/api/users/{id}` | Update user |
+| DELETE | `/api/users/{id}` | Xóa user |
+
+## Cấu trúc thư mục
+
+```
+starlinks/
+├── backend/
+│   ├── src/
+│   │   ├── agents/          # LangGraph agent + tools
+│   │   │   ├── tools/       # generate_bom, get_datasheet, escalate_to_human
+│   │   │   └── ...
+│   │   ├── app/             # FastAPI app
+│   │   │   ├── routers/     # API endpoints
+│   │   │   └── schemas/     # Request/response models
+│   │   ├── db/              # Database models + repositories
+│   │   ├── services/        # Business logic (pdf_converter, llms, email)
+│   │   └── configs.py       # Settings from env
+│   ├── configs/
+│   │   └── prompts/         # AI agent prompts (editable)
+│   ├── data/
+│   │   ├── datasheets/      # Uploaded PDF + markdown files
+│   │   └── generated_boms/  # Output Excel files
+│   └── pyproject.toml
+├── frontend/
+│   ├── src/
+│   │   ├── pages/           # React pages
+│   │   ├── services/        # API client
+│   │   └── components/      # Shared UI components
+│   └── package.json
+├── docker-compose.dev.yml
+├── docker-compose.prod.yml
+└── README.md
+```
+
+## Development
+
+### Hot-reload
+
+```bash
+# Backend + Frontend tự reload khi code thay đổi
 docker compose -f docker-compose.dev.yml watch
 ```
 
-Services:
-
-| Service   | URL                      | Notes                              |
-|-----------|--------------------------|------------------------------------|
-| Frontend  | http://localhost:5173    | Vite dev server                    |
-| Backend   | http://localhost:8030    | FastAPI, docs at `/docs`           |
-| Postgres  | localhost:5437           | user/pass/db: `starlink`           |
-
-After the services are up, run the **one-time bootstrap** below — without
-this, the BOM assistant has no products or datasheets to reason over.
-
-### Database migrations
-
-The backend container does **not** auto-run migrations. On first boot (and any
-time there are new revisions) run:
+### Useful commands
 
 ```bash
-docker compose -f docker-compose.dev.yml exec backend uv run alembic upgrade head
+# Logs
+docker compose -f docker-compose.dev.yml logs -f backend
+
+# Shell vào container
+docker compose -f docker-compose.dev.yml exec backend bash
+
+# Tạo migration mới
+docker compose -f docker-compose.dev.yml exec backend \
+  uv run alembic revision --autogenerate -m "message"
+
+# Reset database
+docker compose -f docker-compose.dev.yml down -v
 ```
 
 ### Production
 
 ```bash
-cp backend/.env.example backend/.env.docker   # fill in real secrets
+cp backend/.env.example backend/.env.docker  # điền secrets thật
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-Prod maps the frontend (nginx) to host port `5173` and the backend to `8030`;
-Postgres stays internal. Override `POSTGRES_PASSWORD` via shell env.
+## Ghi chú kỹ thuật
 
-## Environment variables
-
-All backend config lives in `backend/.env.docker` (Docker) or `backend/.env`
-(host). See `backend/.env.example` for the full list with comments. The most
-important ones:
-
-- `DATABASE__URL` / `CHECKPOINT_DB_URL` – Postgres DSNs. Use `postgres:5432`
-  inside Docker, `localhost:5437` from the host.
-- `OPENAI_API_KEY` + `OPENAI_API_BASE_URL` – any OpenAI-compatible endpoint
-  (OpenRouter, Azure, etc.). Leave the key empty to run the BOM assistant in
-  mock mode.
-- `AUTH__JWT_SECRET_KEY` – change this for any non-local deploy.
-- `CORS_ORIGINS` – comma-separated list of allowed frontend origins.
-- `SMTP__*`, `ESCALATION_EMAIL`, `BOM_RECIPIENT_EMAIL` – email notifications.
-- `LANGFUSE_*` – optional LLM tracing; leave empty to disable.
-- `NHANH__APP_ID` / `NHANH__SECRET_KEY` – Nhanh.vn OAuth app credentials.
-- `NHANH__REDIRECT_URL` – OAuth redirect target; must match the URL registered
-  in the Nhanh app console. For local dev, override the default (which points
-  at the hosted prod backend).
-- `NHANH__WEBHOOKS_VERIFY_TOKEN` – shared secret for webhook `Authorization`
-  header. Must match the token configured in the Nhanh app.
-
-## Product catalog — first-time bootstrap
-
-The BOM agent operates on two data sources that **must be wired up before it
-can produce useful output**:
-
-1. **Datasheets** — PDF spec sheets on disk, grouped by product family.
-2. **Nhanh.vn products** — the live product catalog (SKU, name, pricing,
-   stock) pulled from Nhanh.vn and cached in Postgres.
-
-After each product is ingested from Nhanh, the matcher links it to a datasheet
-PDF so the agent can cite specs in its answers.
-
-Run steps 1 → 4 in order the first time you set up an environment.
-
-### 1. Drop datasheets on disk
-
-The backend reads PDFs from `DATASHEETS_DIR` (default `data/datasheets`,
-resolved relative to the backend working dir — `/app/data/datasheets` in
-Docker, `./backend/data/datasheets` on the host).
-
-Docker Compose bind-mounts `./backend/data` into the container, so put the
-catalog on the host at:
-
-```
-backend/data/datasheets/
-├── AOC/
-├── DAC/
-├── MPO-MTP/
-├── Media Converter/
-├── QSFP/
-├── SFP/
-└── ... (one folder per product family; PDFs inside)
-```
-
-If you relocate the folder, update `DATASHEETS_DIR` **and** the volume mount
-in `docker-compose.*.yml` to match.
-
-Generated BOM outputs land in `backend/data/generated_boms/`, uploads in
-`backend/data/uploads/` — both are also mounted, so files survive container
-restarts.
-
-### 2. Authorize Nhanh.vn (OAuth)
-
-The backend needs an OAuth access token before it can call the Nhanh.vn API.
-Configure the app credentials first, then run the interactive flow.
-
-**Required env vars** (in `backend/.env.docker`):
-
-```bash
-NHANH__APP_ID=<your app id from the Nhanh developer console>
-NHANH__SECRET_KEY=<your app secret>
-# Where Nhanh should redirect after authorization. Must exactly match what's
-# registered in the Nhanh app console. Default points at the hosted prod
-# backend — override for local/staging.
-NHANH__REDIRECT_URL=http://localhost:8030/api/nhanh/callback
-NHANH__WEBHOOKS_VERIFY_TOKEN=<any string; must match the Nhanh app webhook config>
-```
-
-> ⚠️ For local development Nhanh must be able to reach your `redirect_url`
-> over the public internet. Either (a) run the OAuth step on the deployed
-> backend and share the token-backed DB, or (b) expose your local backend via
-> a tunnel (ngrok, cloudflared) and register that URL in the Nhanh console.
-
-Then **in a browser**, while logged into the Nhanh store account that owns
-the catalog, visit:
-
-```
-{backend_domain}/api/nhanh/authorize
-```
-
-Examples:
-
-- Local dev: <http://localhost:8030/api/nhanh/authorize>
-- Hosted:    <https://api-starlink.yitec.dev/api/nhanh/authorize>
-
-Nhanh will prompt for consent and redirect to `/api/nhanh/callback?accessCode=…`.
-The backend exchanges the code for a token and persists it in Postgres.
-
-Verify the token landed:
-
-```bash
-curl http://localhost:8030/api/nhanh/token/status
-# → {"has_token": true, "business_id": ..., "expired_at": "..."}
-```
-
-Tokens expire — re-run `/api/nhanh/authorize` whenever `has_token` flips to
-`false` or `expired_at` is in the past.
-
-### 3. Sync products from Nhanh
-
-Pull the product list into the local DB. This endpoint is auth-protected,
-so you need a logged-in user's JWT:
-
-```bash
-# Full sync (first time, or when you want to re-fetch everything)
-curl -X POST "http://localhost:8030/api/nhanh/products/sync?force_full=true" \
-  -H "Authorization: Bearer $JWT"
-
-# Incremental sync (subsequent runs — only products changed since last sync)
-curl -X POST "http://localhost:8030/api/nhanh/products/sync" \
-  -H "Authorization: Bearer $JWT"
-```
-
-Note: Nhanh's `updatedAt` covers product info (name, price) but **not**
-inventory. For live inventory updates, register the webhook endpoint
-`POST /api/nhanh/webhook` in the Nhanh app console — it handles
-`productAdd/Update/Delete`, `inventoryChange`, and `orderAdd/Update/Delete`
-events, authenticated via `NHANH__WEBHOOKS_VERIFY_TOKEN`.
-
-### 4. Match products to datasheets
-
-Link each Nhanh product to a PDF from step 1 so the agent can cite specs:
-
-```bash
-# Match only products that don't have a datasheet yet (default)
-curl -X POST http://localhost:8030/api/nhanh/products/match-datasheets \
-  -H "Authorization: Bearer $JWT"
-
-# Re-match everything (use after updating datasheets or tweaking the matcher)
-curl -X POST "http://localhost:8030/api/nhanh/products/match-datasheets?rematch_all=true" \
-  -H "Authorization: Bearer $JWT"
-```
-
-Check coverage at any time:
-
-```bash
-curl http://localhost:8030/api/nhanh/products/match-status \
-  -H "Authorization: Bearer $JWT"
-# → {"total": ..., "matched": ..., "unmatched": ...}
-```
-
-Unmatched products usually mean (a) the datasheet PDF isn't under
-`backend/data/datasheets/`, or (b) the product name in Nhanh doesn't line up
-with the PDF filename. Fix either and re-run step 4.
-
-### Re-running on an existing environment
-
-- New datasheet PDFs added → run step 4.
-- Products added/changed in Nhanh → run step 3 (incremental is fine), then
-  step 4 to match any newcomers. Webhooks do this automatically once
-  registered.
-- Token expired → re-run step 2.
-
-### Nhanh endpoint reference
-
-All endpoints are under `/api/nhanh` (mounted by `src/app/routers/nhanh.py`).
-Endpoints marked 🔒 require a logged-in user's JWT.
-
-| Method | Path                              | Purpose                                 |
-|--------|-----------------------------------|-----------------------------------------|
-| GET    | `/authorize`                      | Kick off OAuth (open in browser)        |
-| GET    | `/callback`                       | OAuth redirect target (Nhanh calls it)  |
-| GET    | `/token/status`                   | Is there a valid token?                 |
-| POST   | `/products`                       | Search/list products from Nhanh (live)  |
-| POST   | `/products/sync` 🔒               | Sync Nhanh → local DB                   |
-| POST   | `/products/match-datasheets` 🔒   | Link products to datasheet PDFs         |
-| GET    | `/products/match-status` 🔒       | Matched / unmatched counts              |
-| POST   | `/webhook`                        | Nhanh → backend event receiver          |
-
-## Useful commands
-
-```bash
-# Tail backend logs
-docker compose -f docker-compose.dev.yml logs -f backend
-
-# Open a shell in the backend container
-docker compose -f docker-compose.dev.yml exec backend bash
-
-# Create a new Alembic migration
-docker compose -f docker-compose.dev.yml exec backend \
-  uv run alembic revision --autogenerate -m "your message"
-
-# Reset the database (destroys data!)
-docker compose -f docker-compose.dev.yml down -v
-```
+- **PDF Extraction**: Sử dụng `pdfplumber` (pdfminer engine) cho text — đọc được nhiều font type hơn PyMuPDF. PyMuPDF vẫn dùng cho image extraction.
+- **BOM Source of Truth**: Khi tạo BOM, hệ thống lấy specs trực tiếp từ bảng `products` — đây là data đã qua user review/edit. Không đọc lại raw markdown.
+- **Main Device**: Không tự động extract từ PDF. Mặc định = "N/A", người dùng tự chỉnh ở tab Products.
+- **Excel Sync**: Chỉ sync cột `description`. Các field khác giữ nguyên từ PDF extraction hoặc user edit.

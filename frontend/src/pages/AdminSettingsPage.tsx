@@ -6,9 +6,13 @@ import { UserManagementContent } from '@/pages/UserManagementPage';
 import { DatasheetsContent } from '@/pages/DatasheetsPage';
 import { BomsContent } from '@/pages/BomsPage';
 import { PromptsContent } from '@/pages/PromptsPage';
+import { ProductsContent } from '@/pages/ProductsPage';
+import { ExcelRefsContent } from '@/pages/ExcelRefsPage';
 
 const TABS = [
   { key: 'users', label: 'Users', icon: <UsersIcon /> },
+  { key: 'products', label: 'Products', icon: <FolderOutlineIcon /> },
+  { key: 'excel', label: 'Excel Refs', icon: <FolderOutlineIcon /> },
   { key: 'datasheets', label: 'Datasheets', icon: <FolderOutlineIcon /> },
   { key: 'boms', label: 'BOMs', icon: <FolderOutlineIcon /> },
   { key: 'prompts', label: 'Prompts', icon: <FolderOutlineIcon /> },
@@ -79,6 +83,8 @@ export function AdminSettingsPage() {
         {/* Content */}
         <div className="flex-1 overflow-auto">
           {activeTab === 'users' && <UserManagementContent />}
+          {activeTab === 'products' && <ProductsContent />}
+          {activeTab === 'excel' && <ExcelRefsContent />}
           {activeTab === 'datasheets' && <DatasheetsContent />}
           {activeTab === 'boms' && <BomsContent />}
           {activeTab === 'prompts' && <PromptsContent />}

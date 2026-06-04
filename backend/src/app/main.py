@@ -21,9 +21,9 @@ from src.app.routers.conversations import router as conversations_router
 from src.app.routers.datasheets import router as datasheets_router
 from src.app.routers.boms import router as boms_router
 from src.app.routers.prompts import router as prompts_router
-from src.app.routers.nhanh import router as nhanh_router
 from src.app.routers.files import router as files_router
 from src.app.routers.users import router as users_router
+from src.app.routers.products import router as products_router
 from src.commons.logger import configure_logging
 from src.configs import SETTINGS
 
@@ -49,8 +49,9 @@ async def lifespan(app: FastAPI):
     from sqlmodel import SQLModel
     import src.db.models.users  # noqa: F401
     import src.db.models.conversations  # noqa: F401
-    import src.db.models.nhanh  # noqa: F401
     import src.db.models.files  # noqa: F401
+    import src.db.models.products  # noqa: F401
+    import src.db.models.excel_refs  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
@@ -113,13 +114,6 @@ app.include_router(
     tags=["auth"],
 )
 
-# Nhanh.vn integration routes (public - OAuth callback must be accessible)
-app.include_router(
-    nhanh_router,
-    prefix="/api",
-    tags=["nhanh"],
-)
-
 # Authenticated routes
 app.include_router(
     conversations_router,
@@ -171,6 +165,14 @@ app.include_router(
     prompts_router,
     prefix="/api",
     tags=["prompts"],
+    dependencies=[Depends(get_current_user)],
+)
+
+# Products management (authenticated)
+app.include_router(
+    products_router,
+    prefix="/api",
+    tags=["products"],
     dependencies=[Depends(get_current_user)],
 )
 

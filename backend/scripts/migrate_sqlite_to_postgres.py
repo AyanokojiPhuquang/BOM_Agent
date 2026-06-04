@@ -31,9 +31,7 @@ POSTGRES_URL = os.environ.get(
 # Tables in insertion order (respecting foreign keys)
 TABLES = [
     "users",
-    "nhanh_tokens",
-    "nhanh_sync_logs",
-    "nhanh_products",
+    "products",
     "conversations",
     "conversation_messages",
 ]

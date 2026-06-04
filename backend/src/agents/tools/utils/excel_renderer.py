@@ -11,7 +11,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from src.agents.tools.schemas import GenerateBomOutput, ProductInventoryStatus, STATUS_LABELS
+from src.agents.tools.schemas import GenerateBomOutput
 
 # Styling constants
 _HEADER_FONT = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
@@ -26,16 +26,6 @@ _CELL_BORDER = Border(
     bottom=Side(style="thin", color="D9D9D9"),
 )
 _ALT_ROW_FILL = PatternFill(start_color="F2F7FC", end_color="F2F7FC", fill_type="solid")
-
-_IN_STOCK_FILL = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
-_PARTIAL_FILL = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
-_OUT_OF_STOCK_FILL = PatternFill(start_color="FCE4EC", end_color="FCE4EC", fill_type="solid")
-
-_STATUS_FILLS = {
-    "in_stock": _IN_STOCK_FILL,
-    "partial": _PARTIAL_FILL,
-    "out_of_stock": _OUT_OF_STOCK_FILL,
-}
 
 # BOM sheet columns
 _BOM_COLUMNS = [
@@ -53,21 +43,6 @@ _BOM_COLUMNS = [
     ("Unit Price", 12),
     ("Notes", 30),
 ]
-
-_INV_COLUMNS = [
-    ("Requested", 10),
-    ("Available", 10),
-    ("In Stock", 10),
-    ("Status", 16),
-]
-
-
-def _resolve_columns(has_inventory: bool) -> list[tuple[str, int]]:
-    """Return the full column list based on whether inventory data is present."""
-    columns = list(_BOM_COLUMNS)
-    if has_inventory:
-        columns.extend(_INV_COLUMNS)
-    return columns
 
 
 def _write_title_rows(ws: Worksheet, bom: GenerateBomOutput, last_col: str) -> None:
@@ -119,35 +94,15 @@ def _line_item_values(item) -> list:
     ]
 
 
-def _inventory_values(inv: ProductInventoryStatus | None) -> list:
-    """Extract cell values from a ProductInventoryStatus."""
-    if not inv:
-        return ["", "", "", ""]
-    return [
-        inv.quantity_requested,
-        inv.available,
-        inv.remain,
-        STATUS_LABELS.get(inv.status_label, inv.status_label),
-    ]
-
-
 def _write_data_rows(
     ws: Worksheet,
     bom: GenerateBomOutput,
     header_row: int,
     total_cols: int,
-    inventory_statuses: list[ProductInventoryStatus] | None,
 ) -> None:
-    """Write BOM line item rows with optional inventory columns."""
-    has_inventory = bool(inventory_statuses)
-
+    """Write BOM line item rows."""
     for row_idx, item in enumerate(bom.line_items, start=header_row + 1):
         values = _line_item_values(item)
-
-        if has_inventory:
-            item_idx = row_idx - header_row - 1
-            inv = inventory_statuses[item_idx] if item_idx < len(inventory_statuses) else None
-            values.extend(_inventory_values(inv))
 
         for col_idx, value in enumerate(values, start=1):
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
@@ -155,13 +110,6 @@ def _write_data_rows(
             cell.alignment = Alignment(vertical="top", wrap_text=True)
             if (row_idx - header_row) % 2 == 0:
                 cell.fill = _ALT_ROW_FILL
-
-        # Color-code inventory status cell
-        if has_inventory and item_idx < len(inventory_statuses):
-            inv = inventory_statuses[item_idx]
-            fill = _STATUS_FILLS.get(inv.status_label)
-            if fill:
-                ws.cell(row=row_idx, column=total_cols).fill = fill
 
 
 def _write_assumptions(
@@ -184,14 +132,12 @@ def _write_assumptions(
 def render_bom_excel(
     bom: GenerateBomOutput,
     output_dir: Path,
-    inventory_statuses: list[ProductInventoryStatus] | None = None,
 ) -> Path:
     """Render a BOM to an Excel workbook.
 
     Args:
         bom: The structured BOM output from the subagent.
         output_dir: Directory to save the file in.
-        inventory_statuses: Optional real-time inventory data per product.
 
     Returns:
         Path to the generated .xlsx file.
@@ -202,8 +148,7 @@ def render_bom_excel(
     slug = bom.customer_name.lower().replace(" ", "_")[:30]
     filepath = output_dir / f"{timestamp}_{slug}.xlsx"
 
-    has_inventory = bool(inventory_statuses)
-    columns = _resolve_columns(has_inventory)
+    columns = list(_BOM_COLUMNS)
     total_cols = len(columns)
     last_col = get_column_letter(total_cols)
 
@@ -215,7 +160,7 @@ def render_bom_excel(
 
     _write_title_rows(ws, bom, last_col)
     _write_header_row(ws, columns, header_row)
-    _write_data_rows(ws, bom, header_row, total_cols, inventory_statuses)
+    _write_data_rows(ws, bom, header_row, total_cols)
 
     if bom.assumptions:
         assumptions_start = header_row + len(bom.line_items) + 2

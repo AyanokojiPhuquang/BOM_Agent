@@ -9,9 +9,7 @@ from src.db.repositories.file import (
     FileTagRepository,
     FolderRepository,
 )
-from src.db.repositories.nhanh import NhanhProductRepository, NhanhTokenRepository
 from src.db.repositories.user import UserRepository
-from src.services.nhanh.service import NhanhService
 
 
 async def get_user_repository(
@@ -24,24 +22,6 @@ async def get_conversation_repository(
     session: AsyncSession = Depends(get_db_session),
 ) -> ConversationRepository:
     return ConversationRepository(session)
-
-
-async def get_nhanh_token_repository(
-    session: AsyncSession = Depends(get_db_session),
-) -> NhanhTokenRepository:
-    return NhanhTokenRepository(session)
-
-
-async def get_nhanh_product_repository(
-    session: AsyncSession = Depends(get_db_session),
-) -> NhanhProductRepository:
-    return NhanhProductRepository(session)
-
-
-async def get_nhanh_service(
-    repo: NhanhTokenRepository = Depends(get_nhanh_token_repository),
-) -> NhanhService:
-    return NhanhService(repo)
 
 
 async def get_file_repository(
