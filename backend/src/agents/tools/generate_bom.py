@@ -395,6 +395,30 @@ async def generate_bom(
         items=items,
     )
 
+    # Gate: validate that product_codes are real SKUs, not descriptions.
+    # Real product codes are short (≤40 chars) and don't contain commas, parentheses, or long spaces.
+    # Descriptions are long and verbose.
+    invalid_items = []
+    for item in bom_input.items:
+        code = item.product_code.strip()
+        # A real product code: short, no commas, no Vietnamese words
+        has_comma = "," in code
+        too_long = len(code) > 40
+        has_spaces_in_middle = "  " in code or len(code.split()) > 5
+        if has_comma or too_long or has_spaces_in_middle:
+            invalid_items.append(code)
+
+    if invalid_items:
+        lines = ["❌ **Không thể tạo BOM** — Các mục sau không phải là mã sản phẩm hợp lệ:\n"]
+        for code in invalid_items:
+            lines.append(f"- `{code[:80]}...`" if len(code) > 80 else f"- `{code}`")
+        lines.append(
+            "\n**Vui lòng cung cấp mã sản phẩm chính xác** (ví dụ: `SFP-25G-LR`, `PC-LC-LC-D-X-LM`, `QSFP-100G-SR4`) "
+            "thay vì mô tả sản phẩm.\n\n"
+            "Em sẽ tìm mã sản phẩm phù hợp trong catalog — anh/chị vui lòng mô tả yêu cầu và em sẽ tư vấn mã SP đúng nhé."
+        )
+        return "\n".join(lines)
+
     # 1. Resolve product codes via database + filesystem fallback
     resolved_items = await _resolve_products(bom_input.items)
 
