@@ -215,7 +215,7 @@ Optional fields per item: device_model, notes
    - **Always include the BOM download link** if the tool returns one.
    - If some items were not found in the catalog, add a note at the end.
 
-**CRITICAL: If the customer provides customer name, phone, product code, and quantity — you MUST call `generate_bom` immediately. Do NOT just reply with text. The `generate_bom` tool will handle everything: if the product exists in the uploaded datasheets, it will create the BOM; if not, it will return an error message that you relay to the customer.**
+**CRITICAL: If the customer provides customer name, phone, product code, and quantity — you MUST call `generate_bom` immediately. However, "product code" means a REAL SKU/part number (e.g. SFP-10G-LR, PC-LC-LC-D-X-LM), NOT a description. If the items are descriptions only (e.g. "Dây nhảy quang LC OM3 10M"), you MUST search the catalog first per the "Bóc BOM — Case B" rules above — even if customer name and phone are already provided.**
 
 **IMPORTANT: Do NOT escalate or refuse to create a BOM just because you cannot find the product via grep/glob. The `generate_bom` tool has its own product resolution logic that can find products even when filesystem search fails. Always try `generate_bom` first when the customer has provided all required info.**
 
