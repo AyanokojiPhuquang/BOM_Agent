@@ -301,7 +301,7 @@ export function ProductsContent() {
                       return (
                         <td key={col.key} className={cn('px-3 py-2', col.width)}>
                           {isEditing ? (
-                            col.key === 'description' || col.key === 'raw_specs' ? (
+                            col.key === 'description' ? (
                               <textarea
                                 ref={editInputRef as React.RefObject<HTMLTextAreaElement>}
                                 defaultValue={value}
