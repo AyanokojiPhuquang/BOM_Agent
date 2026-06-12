@@ -8,6 +8,7 @@ import { BomsContent } from '@/pages/BomsPage';
 import { PromptsContent } from '@/pages/PromptsPage';
 import { ProductsContent } from '@/pages/ProductsPage';
 import { ExcelRefsContent } from '@/pages/ExcelRefsPage';
+import { DriveSyncContent } from '@/pages/DriveSyncPage';
 
 const TABS = [
   { key: 'users', label: 'Users', icon: <UsersIcon /> },
@@ -16,6 +17,7 @@ const TABS = [
   { key: 'datasheets', label: 'Datasheets', icon: <FolderOutlineIcon /> },
   { key: 'boms', label: 'BOMs', icon: <FolderOutlineIcon /> },
   { key: 'prompts', label: 'Prompts', icon: <FolderOutlineIcon /> },
+  { key: 'drive', label: 'Drive Sync', icon: <FolderOutlineIcon /> },
 ] as const;
 
 type TabKey = (typeof TABS)[number]['key'];
@@ -88,6 +90,7 @@ export function AdminSettingsPage() {
           {activeTab === 'datasheets' && <DatasheetsContent />}
           {activeTab === 'boms' && <BomsContent />}
           {activeTab === 'prompts' && <PromptsContent />}
+          {activeTab === 'drive' && <DriveSyncContent />}
         </div>
       </div>
     </div>

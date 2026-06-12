@@ -24,6 +24,8 @@ from src.app.routers.prompts import router as prompts_router
 from src.app.routers.files import router as files_router
 from src.app.routers.users import router as users_router
 from src.app.routers.products import router as products_router
+from src.app.routers.drive_sync import router as drive_sync_router
+from src.app.routers.drive_sync import public_router as drive_sync_public_router
 from src.commons.logger import configure_logging
 from src.configs import SETTINGS
 
@@ -52,9 +54,14 @@ async def lifespan(app: FastAPI):
     import src.db.models.files  # noqa: F401
     import src.db.models.products  # noqa: F401
     import src.db.models.excel_refs  # noqa: F401
+    import src.db.models.drive_sync  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
+
+    # Start WebSocket Redis Pub/Sub listener
+    from src.services.drive.websocket_manager import ws_manager
+    await ws_manager.start_listener()
 
     # Seed demo user
     from src.db.database import get_manual_db_session
@@ -74,6 +81,8 @@ async def lifespan(app: FastAPI):
             logger.info("Demo user created: demo@starlink.chat")
 
     yield
+    # Shutdown
+    await ws_manager.stop_listener()
     logger.info("Shutting down Starlink Backend...")
 
 
@@ -112,6 +121,13 @@ app.include_router(
     auth_router,
     prefix="/api",
     tags=["auth"],
+)
+
+# Drive sync OAuth callback (public — redirect from Google, no auth header available)
+app.include_router(
+    drive_sync_public_router,
+    prefix="/api",
+    tags=["drive-sync"],
 )
 
 # Authenticated routes
@@ -173,6 +189,14 @@ app.include_router(
     products_router,
     prefix="/api",
     tags=["products"],
+    dependencies=[Depends(get_current_user)],
+)
+
+# Google Drive sync (authenticated)
+app.include_router(
+    drive_sync_router,
+    prefix="/api",
+    tags=["drive-sync"],
     dependencies=[Depends(get_current_user)],
 )
 

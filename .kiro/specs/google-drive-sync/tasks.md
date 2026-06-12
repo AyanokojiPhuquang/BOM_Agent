@@ -1,0 +1,289 @@
+# Implementation Plan: Google Drive Sync
+
+## Overview
+
+This plan implements Google Drive integration for bulk PDF datasheet import. The implementation follows an infrastructure-first approach: Redis and Docker services, then database models, then backend services (token management → OAuth → folder scanning → orchestration → worker), then WebSocket progress delivery, and finally the React frontend (connection UI → folder picker → progress display).
+
+All backend code is Python 3.11 / FastAPI / async SQLAlchemy. Frontend is React 19 / TypeScript / Tailwind CSS v4. The existing `pdf_converter.py` pipeline is reused for extraction.
+
+## Tasks
+
+- [x] 1. Infrastructure setup: Redis service, environment variables, and dependencies
+  - [x] 1.1 Add Redis and Worker services to `docker-compose.dev.yml`
+    - Add `redis` service (redis:7-alpine) with healthcheck and `redis-data` volume
+    - Add `worker` service reusing backend build context, command `python -m src.workers.drive_worker`, depends on postgres + redis
+    - Add `redis-data` to volumes section
+    - Add `redis` dependency to `backend` service
+    - _Requirements: 11.5_
+  - [x] 1.2 Add Redis and Worker services to `docker-compose.prod.yml`
+    - Mirror dev compose additions for production (different Dockerfile, restart policy `unless-stopped`)
+    - _Requirements: 11.5_
+  - [x] 1.3 Add new Python dependencies to `backend/pyproject.toml`
+    - Add `google-auth>=2.29.0`, `google-auth-oauthlib>=1.2.0`, `google-api-python-client>=2.127.0`
+    - Add `cryptography>=42.0.0`
+    - Add `redis[hiredis]>=5.0.0`
+    - Add `hypothesis>=6.100.0` to `[project.optional-dependencies] test`
+    - _Requirements: 11.1, 11.2, 11.3_
+  - [x] 1.4 Add Google Drive and Redis environment variables to config
+    - Add `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `REDIS_URL`, `TOKEN_ENCRYPTION_KEY` to `backend/src/configs.py` Settings class
+    - Update `backend/.env.example` and `backend/.env.docker` with new variables (placeholder values)
+    - _Requirements: 11.1, 11.2, 11.3, 11.4_
+  - [x] 1.5 Create Redis connection utility (`backend/src/services/drive/redis_client.py`)
+    - Create async Redis client factory reading `REDIS_URL` from settings
+    - Provide `get_redis()` helper for dependency injection
+    - _Requirements: 11.2_
+
+- [x] 2. Database models and migration
+  - [x] 2.1 Create SQLModel models for `drive_tokens`, `batch_jobs`, `batch_tasks` (`backend/src/db/models/drive_sync.py`)
+    - Define `DriveToken` model with encrypted refresh_token field, user_id (unique), token expiry, folder_id, is_connected flag
+    - Define `BatchJob` model with status, file counts, products_extracted, timestamps
+    - Define `BatchTask` model with drive_file_id, file_name, file_size, status, attempt_count, error_message
+    - Import models in `backend/src/db/models/__init__.py`
+    - _Requirements: 3.1, 6.1, 6.3_
+  - [x] 2.2 Create Alembic migration for new tables
+    - Generate migration adding `drive_tokens`, `batch_jobs`, `batch_tasks` tables with indexes
+    - Include indexes on `user_id`, `batch_job_id`, `drive_file_id`, `status`
+    - _Requirements: 3.1, 6.1_
+  - [x] 2.3 Register models in the application lifespan (`backend/src/app/main.py`)
+    - Add `import src.db.models.drive_sync` to the lifespan function so tables are created on startup
+    - _Requirements: 3.1_
+
+- [x] 3. Token Manager with encryption and refresh logic
+  - [x] 3.1 Implement Token Manager (`backend/src/services/drive/token_manager.py`)
+    - Implement `encrypt_token()` / `decrypt_token()` using Fernet symmetric encryption with `TOKEN_ENCRYPTION_KEY`
+    - Implement `store_tokens()` — stores access_token, encrypted refresh_token, expiry, user_id in `drive_tokens`
+    - Implement `get_valid_token()` — checks expiry with 5-minute buffer; if within buffer, calls Google token endpoint to refresh; updates DB record; returns valid access_token
+    - Implement `delete_tokens()` — removes all token records for user_id
+    - Implement `is_connected()` — checks if user has an active token record with `is_connected=True`
+    - Implement `mark_disconnected()` — sets `is_connected=False` for user (used when refresh_token is revoked)
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5_
+  - [ ]* 3.2 Write property tests for Token Manager encryption round-trip
+    - **Property 4: Refresh token encryption round-trip**
+    - **Validates: Requirements 3.2**
+  - [ ]* 3.3 Write property tests for Token Manager expiry logic
+    - **Property 5: Token expiry check with safety buffer**
+    - **Validates: Requirements 3.3**
+  - [ ]* 3.4 Write property test for token storage round-trip
+    - **Property 3: Token storage round-trip**
+    - **Validates: Requirements 3.1**
+
+- [x] 4. OAuth Router (consent URL, callback, disconnect, status)
+  - [x] 4.1 Implement OAuth router (`backend/src/app/routers/drive_sync.py`)
+    - `GET /api/drive/auth/url` — generate consent URL with `drive.readonly` scope, `access_type=offline`, CSRF state bound to user session
+    - `GET /api/drive/auth/callback` — validate CSRF state, exchange code for tokens via Google token endpoint, call Token Manager to store
+    - `POST /api/drive/auth/disconnect` — revoke token at Google's revocation endpoint, delete local tokens via Token Manager (delete even if revocation fails)
+    - `GET /api/drive/auth/status` — return connection status and google_email for authenticated user
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 2.1, 2.2, 2.3, 2.4, 2.5, 13.1, 13.2, 13.3_
+  - [x] 4.2 Register the drive sync router in `backend/src/app/main.py`
+    - Include router with prefix `/api/drive`, authenticated via `get_current_user`
+    - _Requirements: 1.1_
+  - [ ]* 4.3 Write property test for consent URL correctness
+    - **Property 1: Consent URL correctness**
+    - **Validates: Requirements 1.1, 1.2**
+  - [ ]* 4.4 Write property test for CSRF state validation
+    - **Property 2: CSRF state validation**
+    - **Validates: Requirements 2.2, 2.3**
+  - [ ]* 4.5 Write unit tests for OAuth callback (success, failed exchange, invalid state)
+    - Test successful token exchange stores tokens
+    - Test invalid/missing state returns 403
+    - Test token exchange failure returns error response
+    - _Requirements: 2.1, 2.2, 2.3, 2.4_
+
+- [x] 5. Folder Scanner (recursive PDF discovery with pagination and backoff)
+  - [x] 5.1 Implement Folder Scanner (`backend/src/services/drive/folder_scanner.py`)
+    - Implement `validate_folder()` — verify folder exists and is accessible with user's token (Drive API files.get)
+    - Implement `scan_folder()` — recursively enumerate all PDFs (MIME type `application/pdf`) using paginated `files.list` with `pageToken`
+    - Handle subfolders by recursing into items with `mimeType=application/vnd.google-apps.folder`
+    - Return list of `DriveFile(file_id, file_name, file_size)` for each PDF found
+    - Implement exponential backoff on 403/429 rate-limit errors (1s, 2s, 4s, 8s, 16s — up to 5 retries)
+    - Report progress (files discovered so far) via callback
+    - _Requirements: 4.2, 4.3, 5.1, 5.2, 5.3, 5.4, 5.5_
+  - [ ]* 5.2 Write property test for PDF-only filtering
+    - **Property 6: PDF-only filtering with complete metadata**
+    - **Validates: Requirements 5.1, 5.3**
+  - [ ]* 5.3 Write unit tests for Folder Scanner
+    - Test empty folder returns empty list
+    - Test mixed file types returns only PDFs
+    - Test pagination with multiple pages
+    - Test rate limit triggers backoff and retry
+    - _Requirements: 5.1, 5.2, 5.4_
+
+- [x] 6. Sync Orchestrator (batch job creation, task dispatch, deduplication)
+  - [x] 6.1 Implement Sync Orchestrator (`backend/src/services/drive/sync_orchestrator.py`)
+    - Implement `start_sync(user_id, folder_id)` — validate folder, scan PDFs, filter duplicates, create batch job in DB, enqueue tasks to Redis list `drive_sync:tasks`
+    - Implement deduplication — check `batch_tasks` table for existing `drive_file_id` with status "completed"; skip those files
+    - Each task payload includes `task_id`, `batch_job_id`, `user_id`, `drive_file_id`, `file_name`, `file_size`, `attempt: 0`
+    - Store skipped_count in batch job record
+    - Handle Redis unavailability — mark batch job as "failed", return error
+    - Implement `get_job_status()` and `get_job_history()` for API queries
+    - _Requirements: 4.4, 6.1, 6.2, 6.3, 6.4, 12.1, 12.2, 12.3_
+  - [x] 6.2 Implement Sync Router endpoints (`backend/src/app/routers/drive_sync.py`)
+    - `POST /api/drive/sync/start` — accepts folder_id, calls orchestrator
+    - `GET /api/drive/sync/jobs` — returns user's job history
+    - `GET /api/drive/sync/jobs/{job_id}` — returns job with task details
+    - `POST /api/drive/sync/jobs/{job_id}/retry-failed` — re-enqueue DLQ tasks
+    - _Requirements: 6.1, 8.4_
+  - [ ]* 6.3 Write property test for task dispatch correctness
+    - **Property 7: Task dispatch correctness**
+    - **Validates: Requirements 6.2, 6.3**
+  - [ ]* 6.4 Write property test for duplicate file detection
+    - **Property 13: Duplicate file detection and exclusion**
+    - **Validates: Requirements 12.1, 12.2**
+
+- [x] 7. Task Worker (streaming download, extraction pipeline, retry/DLQ)
+  - [x] 7.1 Implement Task Worker (`backend/src/workers/drive_worker.py`)
+    - Main loop: `BRPOP` from `drive_sync:tasks` Redis list with timeout
+    - Implement `download_file_streaming()` — stream PDF to `data/tmp/{task_id}.pdf` in 64KB chunks via httpx; enforce 100MB max file size
+    - Invoke existing `pdf_to_markdown()` then `extract_product_specs_from_content()` from `pdf_converter.py`
+    - Save extracted products to Products table with `drive_file_id` as source reference (populate `pdf_url` or add column reference)
+    - Update `batch_tasks` record status to "completed", increment `batch_jobs.completed_count` and `products_extracted`
+    - **CRITICAL**: Use `try/finally` to always call `os.remove(tmp_path)` for temp file cleanup
+    - _Requirements: 7.1, 7.2, 7.3, 7.4_
+  - [x] 7.2 Implement retry logic and Dead Letter Queue
+    - On failure: increment `attempt_count`, if < 3 re-enqueue with incremented attempt and exponential backoff (2s, 4s, 8s)
+    - After 3 failures: push to `drive_sync:dlq` Redis list with original payload + error message + timestamp
+    - Update task status to "dlq" in database
+    - Update `batch_jobs.failed_count`
+    - When all tasks terminal (completed/dlq): set batch job status to "completed", set `completed_at`
+    - _Requirements: 7.5, 8.1, 8.2, 8.3_
+  - [x] 7.3 Add `__main__.py` entry point for worker (`backend/src/workers/__init__.py` and `backend/src/workers/drive_worker.py`)
+    - Allow running with `python -m src.workers.drive_worker`
+    - Graceful shutdown on SIGTERM/SIGINT
+    - _Requirements: 7.1_
+  - [ ]* 7.4 Write property test for product persistence with source reference
+    - **Property 8: Product persistence with source reference**
+    - **Validates: Requirements 7.3**
+  - [ ]* 7.5 Write property test for DLQ payload preservation
+    - **Property 9: Dead letter queue payload preservation**
+    - **Validates: Requirements 8.2**
+  - [ ]* 7.6 Write unit tests for Task Worker
+    - Test successful download + extraction flow
+    - Test retry on download failure
+    - Test DLQ after 3 failures
+    - Test temp file cleanup in all paths (success + failure)
+    - _Requirements: 7.1, 7.2, 8.1, 8.2_
+
+- [x] 8. Checkpoint - Ensure all backend tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 9. WebSocket endpoint and Progress Notifier (Redis Pub/Sub)
+  - [x] 9.1 Implement Progress Notifier (`backend/src/services/drive/progress_notifier.py`)
+    - Implement `publish(user_id, event)` — serialize event to JSON, publish to Redis channel `drive_sync:progress:{user_id}`
+    - Implement `notify_task_update()` — emit TaskUpdateEvent with batch_job_id, task_id, status, progress counts
+    - Implement `notify_batch_complete()` — emit BatchCompleteEvent with summary (total, completed, failed, skipped, products_extracted)
+    - _Requirements: 9.1, 9.2, 9.4_
+  - [x] 9.2 Implement WebSocketManager (`backend/src/services/drive/websocket_manager.py`)
+    - Implement `register(user_id, websocket)` / `unregister(user_id)` for connection tracking
+    - Implement `start_listener()` — background asyncio task subscribing to Redis Pub/Sub pattern `drive_sync:progress:*`, forward events to matching local WebSocket connections
+    - Handle WebSocket disconnect gracefully
+    - _Requirements: 9.1, 9.2_
+  - [x] 9.3 Add WebSocket endpoint to drive sync router
+    - `WS /api/drive/ws` — authenticate via query param token, register with WebSocketManager, keep alive until disconnect
+    - Start WebSocketManager listener in application lifespan
+    - _Requirements: 9.1_
+  - [x] 9.4 Integrate Progress Notifier into Task Worker
+    - After each task status change (processing, completed, failed), call `notify_task_update()`
+    - When batch completes, call `notify_batch_complete()`
+    - _Requirements: 9.1, 9.2, 9.4_
+  - [ ]* 9.5 Write property test for WebSocket event completeness
+    - **Property 10: WebSocket event completeness**
+    - **Validates: Requirements 9.1, 9.2**
+  - [ ]* 9.6 Write property test for batch completion summary correctness
+    - **Property 11: Batch completion summary correctness**
+    - **Validates: Requirements 9.4**
+  - [ ]* 9.7 Write property test for progress calculation
+    - **Property 12: Progress calculation**
+    - **Validates: Requirements 10.1**
+
+- [x] 10. Frontend: Google Connection Card and OAuth flow
+  - [x] 10.1 Create Drive Sync API service (`frontend/src/services/driveSync.ts`)
+    - Implement API functions: `getAuthUrl()`, `getAuthStatus()`, `disconnectDrive()`, `startSync(folderId)`, `getJobs()`, `getJobDetail(jobId)`, `retryFailed(jobId)`
+    - Use existing `api.ts` axios instance with auth headers
+    - _Requirements: 1.3, 13.4_
+  - [x] 10.2 Create TypeScript types for Drive Sync (`frontend/src/types/driveSync.ts`)
+    - Define interfaces: `AuthStatus`, `BatchJob`, `BatchTask`, `TaskUpdateEvent`, `BatchCompleteEvent`, `SyncStartResponse`
+    - _Requirements: 9.1, 9.2, 10.1_
+  - [x] 10.3 Create Google Connection Card component (`frontend/src/components/drive/GoogleConnectionCard.tsx`)
+    - Show "Connect Google Drive" button when disconnected → opens OAuth consent URL in new window
+    - Show connected state with google_email and "Disconnect" button
+    - Handle OAuth redirect callback (detect `code` query param, show success)
+    - _Requirements: 1.1, 13.4_
+  - [x] 10.4 Create Drive Sync page (`frontend/src/pages/DriveSyncPage.tsx`) and add route
+    - Page layout with Google Connection Card at top
+    - Add route to app router
+    - Add navigation link in sidebar/nav
+    - _Requirements: 1.1, 4.1_
+
+- [x] 11. Frontend: Folder Picker and Sync initiation
+  - [x] 11.1 Create Folder Picker component (`frontend/src/components/drive/FolderPicker.tsx`)
+    - Text input for Google Drive folder ID with validation
+    - "Start Sync" button that calls `startSync(folderId)` API
+    - Show loading state during scan + queue dispatch
+    - Display error messages for invalid/inaccessible folders
+    - _Requirements: 4.1, 4.2, 4.3_
+  - [x] 11.2 Integrate Folder Picker into Drive Sync page
+    - Show Folder Picker only when Google account is connected
+    - After sync starts, transition to progress view
+    - _Requirements: 4.1, 6.1_
+
+- [x] 12. Frontend: WebSocket hook, Progress Bar, and Job History
+  - [x] 12.1 Create WebSocket hook (`frontend/src/hooks/useDriveSyncWS.ts`)
+    - Connect to `ws://host/api/drive/ws?token=...` with auth token
+    - Parse incoming `TaskUpdateEvent` and `BatchCompleteEvent` messages
+    - Auto-reconnect with exponential backoff (1s, 2s, 4s, max 30s)
+    - Expose current batch progress state and event stream
+    - _Requirements: 9.1, 9.2, 9.3_
+  - [x] 12.2 Create Sync Progress component (`frontend/src/components/drive/SyncProgress.tsx`)
+    - Progress bar showing `(completed + failed) / total * 100`%
+    - Per-file status list with icons (queued, processing, completed, failed)
+    - Show skipped count if any files were deduplicated
+    - Batch complete summary (products extracted, failures)
+    - _Requirements: 9.3, 10.1, 10.2, 10.3, 12.3_
+  - [x] 12.3 Create Job History component (`frontend/src/components/drive/JobHistory.tsx`)
+    - Table of past sync jobs: date, folder, status, total/completed/failed/skipped, products extracted
+    - Click to expand and see per-file details
+    - "Retry Failed" button for jobs with DLQ tasks
+    - _Requirements: 8.4, 10.4_
+  - [x] 12.4 Wire all components into Drive Sync page
+    - Compose GoogleConnectionCard, FolderPicker, SyncProgress, JobHistory into the page
+    - Conditional rendering based on connection state and active sync
+    - _Requirements: 10.1, 10.2, 10.3, 10.4_
+
+- [x] 13. Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 14. Integration testing
+  - [ ]* 14.1 Write integration test for full OAuth flow
+    - Mock Google OAuth endpoints, test consent URL → callback → token storage → status check → disconnect
+    - Verify CSRF validation rejects tampered state
+    - _Requirements: 1.1, 1.2, 2.1, 2.2, 2.3, 13.1, 13.2_
+  - [ ]* 14.2 Write integration test for end-to-end sync pipeline
+    - Mock Google Drive API responses (folder listing with PDFs)
+    - Verify: scan → batch creation → Redis enqueue → worker pickup → extraction → DB insert → WebSocket events
+    - Verify deduplication skips already-processed files on re-sync
+    - _Requirements: 5.1, 6.1, 6.2, 7.1, 7.2, 7.3, 9.1, 12.1_
+  - [ ]* 14.3 Write integration test for retry and DLQ behavior
+    - Simulate extraction failures, verify 3 retries with backoff, then DLQ placement
+    - Verify retry-failed endpoint re-enqueues DLQ tasks
+    - _Requirements: 8.1, 8.2, 8.4_
+  - [ ]* 14.4 Write integration test for WebSocket progress delivery
+    - Connect WebSocket client, trigger sync, verify TaskUpdateEvent and BatchCompleteEvent received
+    - Test reconnection behavior
+    - _Requirements: 9.1, 9.2, 9.4_
+  - [ ]* 14.5 Write property test for token deletion on disconnect
+    - **Property 14: Token deletion on disconnect**
+    - **Validates: Requirements 13.1**
+
+- [x] 15. Final checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+## Notes
+
+- Tasks marked with `*` are optional and can be skipped for faster MVP
+- Each task references specific requirements for traceability
+- Checkpoints ensure incremental validation between major phases
+- Property tests validate universal correctness properties from the design document
+- Unit tests validate specific examples and edge cases
+- The worker reuses the existing `pdf_converter.py` pipeline — no changes needed to extraction logic
+- Streaming downloads + `os.remove()` in finally blocks prevent disk fill-up in Docker volumes
+- Redis pub/sub ensures WebSocket events reach the correct FastAPI worker regardless of which process holds the connection

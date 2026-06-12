@@ -4,6 +4,7 @@ import {
   listProducts,
   bulkUpdateProducts,
   deleteProduct,
+  createProduct,
   syncFromExcelRefs,
   type ProductItem,
   type ProductUpdateData,
@@ -148,6 +149,18 @@ export function ProductsContent() {
     }
   };
 
+  const handleAddProduct = async () => {
+    const code = prompt('Nhập mã sản phẩm (Product Code):');
+    if (!code || !code.trim()) return;
+    try {
+      await createProduct({ code: code.trim() });
+      await fetchProducts();
+      setSuccessMsg(`Product "${code.trim()}" added.`);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to add product');
+    }
+  };
+
   const handleExcelSync = async () => {
     setIsSyncing(true);
     setError(null);
@@ -177,24 +190,32 @@ export function ProductsContent() {
             {total} product(s) extracted from uploaded datasheets. Click any cell to edit.
           </p>
         </div>
-        {pendingChanges.size > 0 && (
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-yellow-400">{pendingChanges.size} unsaved change(s)</span>
-            <button
-              onClick={discardChanges}
-              className="px-3 py-1.5 text-sm text-gray-300 border border-dark-border rounded-lg hover:bg-dark-hover transition-colors"
-            >
-              Discard
-            </button>
-            <button
-              onClick={saveAllChanges}
-              disabled={isSaving}
-              className="px-4 py-1.5 text-sm font-medium text-white bg-accent rounded-lg hover:bg-accent-hover transition-colors disabled:opacity-50"
-            >
-              {isSaving ? 'Saving...' : 'Save Changes'}
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {pendingChanges.size > 0 && (
+            <>
+              <span className="text-sm text-yellow-400">{pendingChanges.size} unsaved change(s)</span>
+              <button
+                onClick={discardChanges}
+                className="px-3 py-1.5 text-sm text-gray-300 border border-dark-border rounded-lg hover:bg-dark-hover transition-colors"
+              >
+                Discard
+              </button>
+              <button
+                onClick={saveAllChanges}
+                disabled={isSaving}
+                className="px-4 py-1.5 text-sm font-medium text-white bg-accent rounded-lg hover:bg-accent-hover transition-colors disabled:opacity-50"
+              >
+                {isSaving ? 'Saving...' : 'Save Changes'}
+              </button>
+            </>
+          )}
+          <button
+            onClick={handleAddProduct}
+            className="px-4 py-1.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors"
+          >
+            + Add Product
+          </button>
+        </div>
       </div>
 
       {/* Messages */}

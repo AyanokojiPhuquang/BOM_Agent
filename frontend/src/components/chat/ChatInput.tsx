@@ -121,7 +121,7 @@ export function ChatInput({ onSend, disabled = false, onStop }: ChatInputProps) 
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept="image/*,.pdf,.xlsx,.xls"
               multiple
               onChange={handleImageSelect}
               className="hidden"

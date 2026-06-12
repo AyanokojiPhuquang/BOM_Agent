@@ -44,6 +44,17 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     datasheets_dir: str = "data/datasheets"
 
+    # Google Drive OAuth
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:8030/api/drive/auth/callback"
+
+    # Redis
+    redis_url: str = "redis://localhost:6379/0"
+
+    # Token encryption (Fernet key)
+    token_encryption_key: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="allow",

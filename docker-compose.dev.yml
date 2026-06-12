@@ -16,6 +16,19 @@ services:
       timeout: 3s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   backend:
     build:
       context: ./backend
@@ -37,6 +50,8 @@ services:
       - ENV=development
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     develop:
       watch:
@@ -80,7 +95,29 @@ services:
         - action: rebuild
           path: ./frontend/package-lock.json
 
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    restart: always
+    command: uv run python -m src.workers.drive_worker
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/configs:/app/configs
+      - ./backend/data:/app/data
+      - backend-venv:/app/.venv
+    env_file:
+      - ./backend/.env.docker
+    environment:
+      - ENV=development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   pgdata-dev:
   backend-venv:
   frontend-modules:
+  redis-data:

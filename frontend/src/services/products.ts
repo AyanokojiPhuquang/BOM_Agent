@@ -85,6 +85,13 @@ export async function deleteProduct(id: string): Promise<{ message: string }> {
   return api<{ message: string }>(`/api/products/${id}`, { method: 'DELETE' });
 }
 
+export async function createProduct(data: ProductUpdateData & { code: string }): Promise<ProductItem> {
+  return api<ProductItem>('/api/products/', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
 
 export interface ExcelSyncResponse {
   total_rows_read: number;

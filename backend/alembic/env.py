@@ -19,6 +19,7 @@ import src.db.models.users  # noqa: F401
 import src.db.models.conversations  # noqa: F401
 import src.db.models.files  # noqa: F401
 import src.db.models.products  # noqa: F401
+import src.db.models.drive_sync  # noqa: F401
 
 target_metadata = SQLModel.metadata
 

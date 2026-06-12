@@ -83,6 +83,72 @@ class BulkUpdateResponse(BaseModel):
 # --- Endpoints ---
 
 
+class CreateProductRequest(BaseModel):
+    code: str
+    name: str = ""
+    brand: str = ""
+    description: str = ""
+    data_rate: str = ""
+    fiber_type: str = ""
+    wavelength: str = ""
+    max_distance: str = ""
+    connector: str = ""
+    main_device: str = "N/A"
+    category: str = ""
+    raw_specs: str = ""
+
+
+@router.post("/", response_model=ProductResponse)
+async def create_product(
+    body: CreateProductRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Create a new product manually."""
+    if not body.code.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Product code is required.")
+
+    async with get_manual_db_session() as session:
+        new_product = Product(
+            code=body.code.strip(),
+            name=body.name or body.code.strip(),
+            brand=body.brand,
+            description=body.description,
+            data_rate=body.data_rate,
+            fiber_type=body.fiber_type,
+            wavelength=body.wavelength,
+            max_distance=body.max_distance,
+            connector=body.connector,
+            main_device=body.main_device,
+            category=body.category,
+            raw_specs=body.raw_specs,
+            status=1,
+        )
+        session.add(new_product)
+        await session.flush()
+        await session.refresh(new_product)
+
+        return ProductResponse(
+            id=new_product.id,
+            code=new_product.code,
+            name=new_product.name,
+            brand=new_product.brand,
+            description=new_product.description,
+            data_rate=new_product.data_rate,
+            fiber_type=new_product.fiber_type,
+            wavelength=new_product.wavelength,
+            max_distance=new_product.max_distance,
+            connector=new_product.connector,
+            main_device=new_product.main_device,
+            category=new_product.category,
+            datasheet_path=new_product.datasheet_path,
+            pdf_url=new_product.pdf_url,
+            raw_specs=new_product.raw_specs,
+            status=new_product.status,
+            created_at=new_product.created_at.isoformat() if new_product.created_at else "",
+            updated_at=new_product.updated_at.isoformat() if new_product.updated_at else "",
+        )
+
+
 @router.get("/", response_model=ProductListResponse)
 async def list_products(
     search: str | None = None,

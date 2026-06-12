@@ -108,11 +108,34 @@ async def chat_completions(
     image_urls: list[str] | None = None
     db_images: list[dict] | None = None
     if last_msg.images:
-        image_urls = [img.dataUrl for img in last_msg.images]
         db_images = [img.model_dump() for img in last_msg.images]
         # Save image files to disk (fire-and-forget persistence)
         save_images(db_images)
-        logger.info(f"Received {len(last_msg.images)} image(s) with message")
+        logger.info(f"Received {len(last_msg.images)} image(s)/file(s) with message")
+
+        # Separate images from documents — only send actual images to LLM vision
+        actual_images = [
+            img for img in last_msg.images
+            if not img.name.lower().endswith((".pdf", ".xlsx", ".xls"))
+        ]
+        if actual_images:
+            image_urls = [img.dataUrl for img in actual_images]
+
+    # Extract document content (PDF/Excel) and append to query
+    if last_msg.images:
+        from src.app.utils.document_utils import extract_document_content, extract_pdf_as_images
+        doc_content = extract_document_content(last_msg.images)
+        if doc_content:
+            query = f"{query}\n\n--- Uploaded Document Content ---\n{doc_content}"
+            logger.info("Extracted document content from uploaded file(s)")
+
+        # For scanned PDFs: add page images to vision
+        scanned_images = extract_pdf_as_images(last_msg.images)
+        if scanned_images:
+            if image_urls is None:
+                image_urls = []
+            image_urls.extend(scanned_images)
+            logger.info(f"Added {len(scanned_images)} scanned PDF page(s) as images for vision")
 
     if not request.stream:
         # --- Non-streaming ---

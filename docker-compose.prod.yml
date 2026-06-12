@@ -14,6 +14,17 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   backend:
     build:
       context: ./backend
@@ -31,12 +42,32 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8030/health')"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: python -m src.workers.drive_worker
+    env_file:
+      - ./backend/.env.docker
+    environment:
+      - ENV=production
+    volumes:
+      - ./backend/data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   frontend:
     build:
@@ -51,3 +82,4 @@ services:
 
 volumes:
   pgdata-prod:
+  redis-data:
