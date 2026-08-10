@@ -16,6 +16,7 @@ After upload, the system scans the extracted files and creates/updates
 product records in the database so the BOM agent can reference them.
 """
 
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -159,6 +160,71 @@ async def _sync_products_from_datasheets(products: list[dict]) -> tuple[int, int
         await session.commit()
 
     return created, updated
+
+
+async def process_datasheet_file(
+    file_path: Path,
+    category: str,
+    datasheets_dir: Path,
+) -> tuple[int, int, list[dict]]:
+    """Run a saved datasheet file through the full extraction pipeline.
+
+    This is the SAME pipeline used by the direct PDF upload and Google Drive
+    sync flows: convert to markdown -> LLM spec extraction -> DB sync.
+
+    Args:
+        file_path: Path to the already-saved datasheet file (inside datasheets_dir).
+        category: Category label used as a fallback and for the product folder.
+        datasheets_dir: Resolved root datasheets directory.
+
+    Returns:
+        (created_count, updated_count, product_records)
+    """
+    from src.services.pdf_converter import (
+        ExtractedProductSpec,
+        extract_product_code_from_filename,
+        extract_product_specs_from_content,
+        pdf_to_markdown,
+    )
+
+    product_dir = file_path.parent
+    filename = file_path.name
+
+    # Convert to markdown (currently supports PDF; other types would extend here)
+    md_path = pdf_to_markdown(file_path, product_dir)
+
+    md_content = md_path.read_text(encoding="utf-8")
+    specs = await extract_product_specs_from_content(md_content, filename)
+
+    if not specs:
+        specs = [ExtractedProductSpec(code=extract_product_code_from_filename(filename))]
+
+    relative_md_path = str(md_path.relative_to(datasheets_dir))
+    pdf_relative_path = str(file_path.relative_to(datasheets_dir))
+    pdf_download_url = f"/api/datasheets/pdfs/{pdf_relative_path}"
+
+    product_records = [
+        {
+            "code": spec.code,
+            "name": spec.name or spec.code,
+            "brand": spec.brand,
+            "description": spec.description,
+            "data_rate": spec.data_rate,
+            "fiber_type": spec.fiber_type,
+            "wavelength": spec.wavelength,
+            "max_distance": spec.max_distance,
+            "connector": spec.connector,
+            "main_device": "N/A",
+            "category": spec.category or category,
+            "datasheet_path": relative_md_path,
+            "pdf_url": pdf_download_url,
+            "raw_specs": spec.raw_specs,
+        }
+        for spec in specs
+    ]
+
+    created, updated = await _sync_products_from_datasheets(product_records)
+    return created, updated, product_records
 
 
 # --- Endpoints ---
@@ -655,3 +721,122 @@ async def delete_pdf(
         "message": f"PDF '{full_path.name}' and {deleted_products} product(s) deleted.",
         "deleted_products": deleted_products,
     }
+
+
+# --- Datasheet from product URL (AI-driven link discovery) ---
+
+
+class DatasheetFromUrlRequest(BaseModel):
+    url: str
+    category: str = "WebScraped"
+
+
+class DatasheetFromUrlResponse(BaseModel):
+    message: str
+    source_url: str
+    datasheet_url: str
+    filename: str
+    total_products_created: int
+    total_products_updated: int
+    products: list[DatasheetProductItem]
+
+
+@router.post("/from-url", response_model=DatasheetFromUrlResponse)
+async def add_datasheet_from_url(
+    payload: DatasheetFromUrlRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Add a datasheet by giving a product page URL.
+
+    The system fetches the page, uses an LLM to locate the datasheet download
+    link (layout-agnostic — no brittle auto-click selectors), downloads the
+    file, and runs it through the same processing pipeline as a direct upload.
+    """
+    from src.services.datasheet_scraper import (
+        DatasheetScrapeError,
+        download_datasheet,
+        find_datasheet_url,
+    )
+    from src.services.pdf_converter import extract_product_code_from_filename
+
+    url = payload.url.strip()
+    if not url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A product URL is required.",
+        )
+
+    try:
+        # 1-3. Locate the datasheet link (static HTML, then JS-render fallback).
+        selection = await find_datasheet_url(url)
+        if not selection.found or not selection.url:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    "Could not find a datasheet download link on the page. "
+                    f"{selection.reason}".strip()
+                ),
+            )
+
+        # 4. Download the datasheet into a category/product folder.
+        datasheets_dir = Path(SETTINGS.datasheets_dir).resolve()
+        # Temporary folder based on filename; refined after we know the file name.
+        tmp_dir = datasheets_dir / payload.category / "_incoming"
+        downloaded = await download_datasheet(selection.url, tmp_dir)
+
+        if not downloaded.filename.lower().endswith(".pdf"):
+            # Clean up unsupported file and report.
+            downloaded.path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"The linked datasheet ('{downloaded.filename}') is not a PDF. "
+                    "Only PDF datasheets are currently supported."
+                ),
+            )
+
+        # Move into a per-product folder named from the file.
+        folder_code = extract_product_code_from_filename(downloaded.filename)
+        product_dir = datasheets_dir / payload.category / folder_code
+        product_dir.mkdir(parents=True, exist_ok=True)
+        final_path = product_dir / downloaded.filename
+        shutil.move(str(downloaded.path), str(final_path))
+        # Remove the now-empty incoming folder if possible.
+        if tmp_dir.exists() and not any(tmp_dir.iterdir()):
+            tmp_dir.rmdir()
+
+        # 5. Run the shared extraction pipeline.
+        created, updated, records = await process_datasheet_file(
+            final_path, payload.category, datasheets_dir
+        )
+
+    except DatasheetScrapeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(e),
+        ) from e
+
+    logger.info(
+        f"Datasheet from URL {url}: downloaded {downloaded.filename}, "
+        f"{created} created, {updated} updated"
+    )
+
+    return DatasheetFromUrlResponse(
+        message=(
+            f"Downloaded datasheet '{downloaded.filename}'. "
+            f"{created} product(s) created, {updated} updated."
+        ),
+        source_url=url,
+        datasheet_url=selection.url,
+        filename=downloaded.filename,
+        total_products_created=created,
+        total_products_updated=updated,
+        products=[
+            DatasheetProductItem(
+                code=r["code"],
+                datasheet_path=r["datasheet_path"],
+                category=r["category"],
+            )
+            for r in records
+        ],
+    )

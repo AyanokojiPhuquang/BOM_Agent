@@ -34,6 +34,11 @@ COPY --from=builder /app/configs /app/configs
 
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Install Chromium (+ OS deps) for Playwright — used as a fallback to render
+# JavaScript-heavy product pages when locating datasheet links.
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/.playwright
+RUN playwright install --with-deps chromium
+
 EXPOSE 8030
 
 CMD ["uvicorn", "src.app.main:app", "--host", "0.0.0.0", "--port", "8030"]

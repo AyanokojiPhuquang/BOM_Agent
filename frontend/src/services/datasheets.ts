@@ -153,3 +153,24 @@ export async function listUploadedPdfs(): Promise<PdfListResponse> {
 export async function deleteUploadedPdf(downloadUrl: string): Promise<{ message: string }> {
   return api<{ message: string }>(downloadUrl, { method: 'DELETE' });
 }
+
+
+export interface DatasheetFromUrlResponse {
+  message: string;
+  source_url: string;
+  datasheet_url: string;
+  filename: string;
+  total_products_created: number;
+  total_products_updated: number;
+  products: DatasheetProduct[];
+}
+
+export async function addDatasheetFromUrl(
+  url: string,
+  category: string = 'WebScraped',
+): Promise<DatasheetFromUrlResponse> {
+  return api<DatasheetFromUrlResponse>('/api/datasheets/from-url', {
+    method: 'POST',
+    body: JSON.stringify({ url, category }),
+  });
+}

@@ -8,6 +8,7 @@ import {
   uploadPdfDatasheets,
   listUploadedPdfs,
   deleteUploadedPdf,
+  addDatasheetFromUrl,
   type DatasheetProduct,
   type PdfFileItem,
 } from '@/services/datasheets';
@@ -25,6 +26,8 @@ export function DatasheetsContent() {
   const [replaceOnUpload, setReplaceOnUpload] = useState(false);
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
   const [pdfFiles, setPdfFiles] = useState<PdfFileItem[]>([]);
+  const [datasheetUrl, setDatasheetUrl] = useState('');
+  const [isFetchingUrl, setIsFetchingUrl] = useState(false);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
 
@@ -118,6 +121,26 @@ export function DatasheetsContent() {
     } finally {
       setIsUploadingPdf(false);
       if (pdfInputRef.current) pdfInputRef.current.value = '';
+    }
+  };
+
+  const handleAddFromUrl = async () => {
+    const url = datasheetUrl.trim();
+    if (!url) return;
+
+    setIsFetchingUrl(true);
+    setUploadResult(null);
+    setError(null);
+
+    try {
+      const result = await addDatasheetFromUrl(url);
+      setUploadResult(result.message);
+      setDatasheetUrl('');
+      await fetchDatasheets();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to fetch datasheet from URL');
+    } finally {
+      setIsFetchingUrl(false);
     }
   };
 
@@ -258,6 +281,70 @@ export function DatasheetsContent() {
           </label>
         </div>
       </div>
+
+      {/* Add from Product URL Section */}
+      <div className="bg-dark-surface border border-dark-border rounded-xl p-6">
+        <h3 className="text-lg font-semibold text-white mb-4">Add Datasheet from Product URL</h3>
+        <p className="text-sm text-gray-400 mb-4">
+          Paste a product page URL. The system uses AI to locate the datasheet download link on the page,
+          downloads it, and extracts the product specifications automatically.
+        </p>
+
+        <div className="flex items-center gap-3 flex-wrap">
+          <input
+            type="url"
+            placeholder="https://example.com/products/my-product"
+            value={datasheetUrl}
+            onChange={e => setDatasheetUrl(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !isFetchingUrl && datasheetUrl.trim()) {
+                handleAddFromUrl();
+              }
+            }}
+            disabled={isFetchingUrl}
+            className="flex-1 min-w-[280px] px-3 py-2 rounded-lg bg-dark-bg border border-dark-border text-white text-sm placeholder-gray-500 focus:outline-none focus:border-accent disabled:opacity-50"
+          />
+          <button
+            onClick={handleAddFromUrl}
+            disabled={isFetchingUrl || !datasheetUrl.trim()}
+            className={cn(
+              'inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors',
+              isFetchingUrl || !datasheetUrl.trim()
+                ? 'bg-gray-600 text-gray-300 cursor-not-allowed'
+                : 'bg-accent/80 text-white hover:bg-accent'
+            )}
+          >
+            {isFetchingUrl ? (
+              <>
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Finding datasheet...
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                </svg>
+                Fetch from URL
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Global status messages */}
+      {uploadResult && (
+        <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/20 text-green-400 text-sm">
+          {uploadResult}
+        </div>
+      )}
+      {error && (
+        <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+          {error}
+        </div>
+      )}
 
       {/* Stats */}
       {total > 0 && (

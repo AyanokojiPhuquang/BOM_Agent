@@ -19,3 +19,9 @@ models:
         primary:
             model: "google/gemini-2.5-flash"
             temperature: 0.0
+
+    services/datasheet_scraper/default:
+        model_type: "langchain"
+        primary:
+            model: "google/gemini-2.5-flash"
+            temperature: 0.0
