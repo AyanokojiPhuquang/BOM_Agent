@@ -129,16 +129,18 @@ def _extract_pdf_text(pdf_bytes: bytes) -> str:
 
 
 def _pdf_pages_to_images(pdf_bytes: bytes, max_pages: int = MAX_VISION_PAGES) -> list[str]:
-    """Convert PDF pages to base64 PNG data URLs for LLM vision.
+    """Convert PDF pages to base64 JPEG data URLs for LLM vision.
 
-    Uses PyMuPDF (fitz) to render pages as images.
+    Uses PyMuPDF (fitz) to render pages as compressed JPEG images.
+    Resolution and quality are tuned to keep each image under ~200KB base64
+    so the total payload stays within API limits.
 
     Args:
         pdf_bytes: Raw PDF file bytes.
         max_pages: Maximum number of pages to convert.
 
     Returns:
-        List of base64 data URLs (data:image/png;base64,...).
+        List of base64 data URLs (data:image/jpeg;base64,...).
     """
     try:
         try:
@@ -149,20 +151,40 @@ def _pdf_pages_to_images(pdf_bytes: bytes, max_pages: int = MAX_VISION_PAGES) ->
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         image_urls: list[str] = []
 
+        # Target: each image < 250KB base64 (~185KB raw JPEG)
+        # Use 100 DPI for scanned docs (still readable for LLM vision)
+        TARGET_DPI = 100
+        JPEG_QUALITY = 60
+        MAX_IMAGE_BYTES = 250_000  # max base64 size per image
+
         for i, page in enumerate(doc):
             if i >= max_pages:
                 break
 
-            # Render page at 150 DPI (good balance of quality vs size)
-            mat = fitz.Matrix(150 / 72, 150 / 72)
+            # Render page at target DPI
+            scale = TARGET_DPI / 72
+            mat = fitz.Matrix(scale, scale)
             pix = page.get_pixmap(matrix=mat)
-            png_bytes = pix.tobytes("png")
 
-            b64 = base64.b64encode(png_bytes).decode()
-            image_urls.append(f"data:image/png;base64,{b64}")
+            # Convert to JPEG (much smaller than PNG for scanned content)
+            jpeg_bytes = pix.tobytes("jpeg", jpg_quality=JPEG_QUALITY)
+
+            # If still too large, reduce quality further
+            if len(jpeg_bytes) > MAX_IMAGE_BYTES * 3 // 4:
+                # Try lower DPI
+                scale_low = 72 / 72  # 72 DPI
+                mat_low = fitz.Matrix(scale_low, scale_low)
+                pix_low = page.get_pixmap(matrix=mat_low)
+                jpeg_bytes = pix_low.tobytes("jpeg", jpg_quality=50)
+
+            b64 = base64.b64encode(jpeg_bytes).decode()
+            image_urls.append(f"data:image/jpeg;base64,{b64}")
 
         doc.close()
-        logger.info(f"Converted {len(image_urls)} PDF pages to images for vision")
+        logger.info(
+            f"Converted {len(image_urls)} PDF pages to JPEG images for vision "
+            f"(avg {sum(len(u) for u in image_urls) // max(len(image_urls), 1) // 1024}KB each)"
+        )
         return image_urls
     except Exception as e:
         logger.error(f"Failed to convert PDF pages to images: {e}")
