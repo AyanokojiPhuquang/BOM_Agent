@@ -128,12 +128,17 @@ async def _resolve_products(
     return results
 
 
-def _find_distance_mismatch(resolved_items: list[dict]) -> list[dict] | None:
-    """Detect resolved items whose SKU distance conflicts with the request.
+async def _find_distance_mismatch(resolved_items: list[dict]) -> list[dict] | None:
+    """Detect resolved items where the agent picked the WRONG distance variant.
 
-    For each item resolved to a real Product, compare the distance the agent
-    put in ``notes``/``device_model`` against the SKU's ``max_distance``.
-    Returns a list describing the conflicting items, or None if all consistent.
+    Only flags a conflict when the requested distance differs from the chosen
+    SKU's distance AND the catalog actually contains a product of the same data
+    rate that matches the requested distance better. In that case the agent
+    should have picked that better variant, so we block and ask it to re-select.
+
+    If the catalog has no closer-distance variant (e.g. tender asks 120km but the
+    nearest available is 80km), we do NOT block — choosing the nearest available
+    product is the correct business behaviour, so the BOM proceeds.
     """
     conflicts: list[dict] = []
 
@@ -146,8 +151,13 @@ def _find_distance_mismatch(resolved_items: list[dict]) -> list[dict] | None:
             part for part in (item.get("notes"), item.get("device_model")) if part
         )
         conflict = find_distance_conflict(requested_text, product.max_distance)
-        if conflict:
-            requested_m, sku_m = conflict
+        if not conflict:
+            continue
+
+        requested_m, sku_m = conflict
+
+        # Only block if a better-matching variant exists in the catalog.
+        if await _catalog_has_closer_distance(product, requested_m, sku_m):
             conflicts.append(
                 {
                     "product_code": item["product_code"],
@@ -155,8 +165,62 @@ def _find_distance_mismatch(resolved_items: list[dict]) -> list[dict] | None:
                     "sku_distance": format_meters(sku_m),
                 }
             )
+        else:
+            logger.info(
+                f"Distance mismatch for {item['product_code']} "
+                f"(req {format_meters(requested_m)} vs SKU {format_meters(sku_m)}) "
+                "but no closer catalog variant exists — accepting nearest match."
+            )
 
     return conflicts or None
+
+
+async def _catalog_has_closer_distance(
+    product: Product,
+    requested_m: float,
+    current_sku_m: float,
+) -> bool:
+    """Does the catalog contain a same-data-rate product whose distance is a
+    strictly better match to ``requested_m`` than the currently chosen SKU?
+    """
+    from sqlmodel import select
+
+    from src.agents.tools.utils.distance_utils import (
+        extract_distances_meters,
+        is_multivalue_or_fuzzy,
+    )
+
+    if not product.data_rate:
+        # Without a comparable data rate we can't safely find alternatives.
+        return False
+
+    current_gap = abs(requested_m - current_sku_m)
+
+    try:
+        async with get_manual_db_session() as session:
+            result = await session.execute(
+                select(Product).where(
+                    Product.status == 1,
+                    Product.data_rate == product.data_rate,
+                )
+            )
+            candidates = result.scalars().all()
+    except Exception as e:
+        logger.warning(f"Catalog distance lookup failed: {e}")
+        return False
+
+    for cand in candidates:
+        if is_multivalue_or_fuzzy(cand.max_distance):
+            continue
+        cand_distances = extract_distances_meters(cand.max_distance)
+        if len(cand_distances) != 1:
+            continue
+        cand_m = next(iter(cand_distances))
+        # A meaningfully closer variant exists → the agent should use it.
+        if abs(requested_m - cand_m) < current_gap - 1.0:
+            return True
+
+    return False
 
 
 def _format_distance_mismatch(conflicts: list[dict]) -> str:
@@ -501,7 +565,7 @@ async def generate_bom(
     # records the correct requested distance in `notes` but selects a SKU for
     # a different distance variant (e.g. asks for 120km, picks a 40km SKU).
     # Catch that here before generating the BOM and ask the agent to re-select.
-    distance_mismatch = _find_distance_mismatch(resolved_items)
+    distance_mismatch = await _find_distance_mismatch(resolved_items)
     if distance_mismatch:
         return _format_distance_mismatch(distance_mismatch)
 

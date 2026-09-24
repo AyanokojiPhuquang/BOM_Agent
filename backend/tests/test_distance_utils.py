@@ -54,3 +54,13 @@ def test_fuzzy_sku_distance_is_skipped():
 def test_multivalue_request_is_skipped():
     # If the request text itself lists several distances, stay conservative.
     assert find_distance_conflict("10km or 40km options", "40km") is None
+
+
+
+def test_conflict_still_detected_for_wrong_variant():
+    # The pure conflict detector still flags a clear mismatch; the decision to
+    # block vs allow (based on whether a closer catalog variant exists) is made
+    # in generate_bom._find_distance_mismatch, which is covered by integration
+    # tests against the real catalog.
+    assert find_distance_conflict("LC, 120km DDM", "40km") is not None
+    assert find_distance_conflict("SFP+ 120km 10GE", "80km") is not None
