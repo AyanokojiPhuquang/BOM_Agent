@@ -396,10 +396,23 @@ def _format_bom_summary(bom: GenerateBomOutput) -> str:
     return "\n".join(lines)
 
 
+def _format_all_missing(not_found_codes: list[str]) -> str:
+    """Response when none of the requested codes exist in the catalog."""
+    codes = ", ".join(f"`{c}`" for c in not_found_codes) if not_found_codes else ""
+    return (
+        "**NO_BOM_GENERATED:** None of the requested codes are in the system "
+        f"catalog, so no BOM was created: {codes}. "
+        "Tell the customer the system currently has no data for these codes "
+        "(e.g. \"⚠️ Hệ thống hiện chưa có dữ liệu về các mã: ... nên em chưa "
+        "lên được BOM. Anh/chị vui lòng xác nhận lại mã giúp em nhé.\")."
+    )
+
+
 def _build_tool_response(
     bom: GenerateBomOutput,
     email_sent: bool,
     filepath: Path | None = None,
+    not_found_codes: list[str] | None = None,
 ) -> str:
     """Assemble the final tool response from all parts."""
     parts = [_format_bom_summary(bom)]
@@ -407,6 +420,18 @@ def _build_tool_response(
     if filepath:
         filename = filepath.name
         parts.append(f"\n**Download:** [{filename}](/api/files/boms/{filename})")
+
+    # Surface codes that were NOT in the catalog. These were excluded from the
+    # BOM; the agent must tell the customer the system has no data for them.
+    if not_found_codes:
+        codes = ", ".join(f"`{c}`" for c in not_found_codes)
+        parts.append(
+            "\n**NOT_IN_CATALOG:** The following codes are not in the system "
+            f"catalog and were EXCLUDED from the BOM: {codes}. "
+            "You MUST tell the customer the system has no data for these codes "
+            "(e.g. \"⚠️ Lưu ý: Hệ thống chưa có dữ liệu về các mã sau nên em "
+            "chưa đưa vào BOM: ...\")."
+        )
 
     email_note = "Internal email sent." if email_sent else "Internal email not sent."
     parts.append(f"\n_{email_note}_")
@@ -480,13 +505,22 @@ async def generate_bom(
     if distance_mismatch:
         return _format_distance_mismatch(distance_mismatch)
 
-    # Check if ALL codes failed to resolve — still proceed but note the errors
+    # Split into found vs not-found. Only products that exist in the catalog
+    # go into the BOM. Codes not in the catalog are reported back to the agent
+    # so it can tell the customer the system has no data for them.
     not_found = [r for r in resolved_items if r["error"] and "not found" in r["error"]]
-    if not_found and len(not_found) == len(resolved_items):
-        logger.info(f"No products found in catalog, proceeding with raw info: {[r['product_code'] for r in resolved_items]}")
+    not_found_codes = [r["product_code"] for r in not_found]
+    found_items = [r for r in resolved_items if not (r["error"] and "not found" in r["error"])]
+
+    if not_found:
+        logger.info(f"Products not in catalog (excluded from BOM): {not_found_codes}")
+
+    # If nothing is in the catalog, don't build an empty BOM — just report back.
+    if not found_items:
+        return _format_all_missing(not_found_codes)
 
     # 2. Read product specs (from DB structured data + markdown files)
-    items_with_content = await _read_all_product_files(resolved_items)
+    items_with_content = await _read_all_product_files(found_items)
 
     # 3. Call LLM subagent
     user_prompt = _build_subagent_input(items_with_content, bom_input)
@@ -510,4 +544,4 @@ async def generate_bom(
     email_sent = await _send_bom_email(bom_output, filepath)
 
     # 7. Build response
-    return _build_tool_response(bom_output, email_sent, filepath)
+    return _build_tool_response(bom_output, email_sent, filepath, not_found_codes)
