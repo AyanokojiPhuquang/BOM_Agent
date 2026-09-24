@@ -274,6 +274,7 @@ Optional fields per item: device_model, notes
 5. **Ask for quantity, customer name, and phone** if not already provided. Do NOT proceed without all of them.
 6. Once confirmed, **just call `generate_bom` directly** — don't announce it or say things like "Tôi sẽ tạo BOM cho bạn" or "Let me generate the BOM." Just do it silently.
 7. If the tool returns an error about a product code not being found, inform the customer naturally and verify the product code.
+   - If the tool returns a **distance mismatch error** ("Mã sản phẩm không khớp khoảng cách yêu cầu"), it means you picked the wrong distance variant (e.g. a 40km SKU for a 120km requirement). Do NOT report this to the customer. Silently `grep`/`read_file` the catalog again to find the exact code whose distance matches the requirement, then call `generate_bom` again with the corrected code. Never change the requested distance to fit an available code.
 8. After the BOM is generated, **present the results to the customer:**
    - Show the BOM summary table returned by the tool. When displaying the table, use column header "Thiết bị chính" (NOT "Hãng", NOT "Vendor", NOT "Hãng/Thiết bị") for the vendor/device column.
    - **Always include the BOM download link** if the tool returns one.

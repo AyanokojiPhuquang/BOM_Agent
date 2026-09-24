@@ -14,6 +14,16 @@ from loguru import logger
 MIN_CHARS_PER_PAGE = 50
 # Max pages to send as images to LLM vision (cost control)
 MAX_VISION_PAGES = 8
+# Text-quality thresholds for detecting a broken/garbled text layer.
+# Scanned PDFs with a poor embedded OCR layer often extract as many short,
+# fragmented lines (single characters spread across rows). Such text passes a
+# naive length check but is useless to the agent, so we route those to vision.
+# A "short line" is one with at most this many non-space characters.
+GARBLED_SHORT_LINE_MAX_CHARS = 2
+# If at least this fraction of non-empty lines are short, treat as garbled.
+GARBLED_SHORT_LINE_FRACTION = 0.4
+# Only apply the garbled check once there are enough lines to be meaningful.
+GARBLED_MIN_LINES = 15
 
 
 def extract_document_content(images: list) -> str:
@@ -55,7 +65,7 @@ def extract_pdf_as_images(images: list) -> list[str]:
     """For scanned PDFs, return base64 image URLs of pages for LLM vision.
 
     Returns list of base64 data URLs (image/png) that can be sent to LLM as image_urls.
-    Only returns images for PDFs that don't have extractable text.
+    Only returns images for PDFs that don't have usable extractable text.
     """
     image_urls: list[str] = []
 
@@ -80,6 +90,86 @@ def extract_pdf_as_images(images: list) -> list[str]:
     return image_urls
 
 
+async def extract_scanned_pdf_markdown(images: list) -> tuple[str, list[str]]:
+    """OCR scanned/garbled PDFs into clean Markdown via a dedicated vision model.
+
+    For each PDF attachment whose text layer is missing or garbled, render its
+    pages to images and transcribe them with the strong OCR model. This yields
+    structured Markdown (tables preserved) that is far more reliable for the
+    agent than a broken pdfplumber text layer.
+
+    Args:
+        images: list of ImageAttachment-like objects.
+
+    Returns:
+        A tuple ``(markdown, leftover_image_urls)``:
+          * ``markdown``: combined OCR Markdown for all scanned PDFs (may be "").
+          * ``leftover_image_urls``: page images for any scanned PDF where OCR
+            failed, so the caller can still fall back to raw-image vision.
+    """
+    # Imported lazily to avoid a heavy import at module load and to keep the
+    # text-only extraction path free of LLM dependencies.
+    from src.services.pdf_ocr import ocr_pdf_images
+
+    markdown_parts: list[str] = []
+    leftover_images: list[str] = []
+
+    for attachment in images:
+        name = attachment.name if hasattr(attachment, "name") else attachment.get("name", "")
+        data_url = attachment.dataUrl if hasattr(attachment, "dataUrl") else attachment.get("dataUrl", "")
+
+        if not data_url or "," not in data_url:
+            continue
+        if not name.lower().endswith(".pdf"):
+            continue
+
+        _, b64_data = data_url.split(",", 1)
+        pdf_bytes = base64.b64decode(b64_data)
+
+        if not _is_scanned_pdf(pdf_bytes):
+            continue
+
+        page_images = _pdf_pages_to_images(pdf_bytes)
+        if not page_images:
+            continue
+
+        ocr_text = await ocr_pdf_images(page_images, filename=name)
+        if ocr_text:
+            markdown_parts.append(f"## File: {name}\n{ocr_text}")
+        else:
+            # OCR unavailable/failed — keep raw images for agent vision fallback.
+            leftover_images.extend(page_images)
+
+    return "\n\n".join(markdown_parts), leftover_images
+
+
+def _looks_like_garbled_text(text: str) -> bool:
+    """Heuristic: does extracted text look like a broken OCR/text layer?
+
+    Scanned tender documents sometimes carry a low-quality embedded text layer
+    that pdfplumber extracts as hundreds of 1-2 character lines (columns torn
+    apart). That text is long enough to pass a length check but is unusable.
+    We flag it so the caller can fall back to vision instead.
+
+    Returns True only when there are enough lines to judge AND a large share of
+    them are extremely short.
+    """
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) < GARBLED_MIN_LINES:
+        return False
+
+    short = sum(1 for ln in lines if len(ln) <= GARBLED_SHORT_LINE_MAX_CHARS)
+    fraction = short / len(lines)
+    return fraction >= GARBLED_SHORT_LINE_FRACTION
+
+
+def _is_usable_pdf_text(text: str) -> bool:
+    """True if extracted PDF text is both long enough and not garbled."""
+    if not text or len(text) <= MIN_CHARS_PER_PAGE:
+        return False
+    return not _looks_like_garbled_text(text)
+
+
 def _extract_pdf_smart(data_url: str, filename: str) -> str:
     """Smart PDF extraction: text first, vision fallback for scans.
 
@@ -91,23 +181,30 @@ def _extract_pdf_smart(data_url: str, filename: str) -> str:
     # Try text extraction first
     text = _extract_pdf_text(pdf_bytes)
 
-    if text and len(text) > MIN_CHARS_PER_PAGE:
+    if _is_usable_pdf_text(text):
         # Good text extraction — use it
         if len(text) > 15000:
             text = text[:15000] + "\n\n[... truncated ...]"
         logger.info(f"PDF text extraction successful for {filename}: {len(text)} chars")
         return text
 
-    # Text extraction failed or too sparse — this is likely a scanned PDF
-    # Convert to images and return a note (images will be sent separately via image_urls)
-    logger.info(f"PDF {filename} appears to be scanned (text too sparse). Will use vision.")
+    # Text extraction failed, too sparse, or garbled (broken OCR layer).
+    # Treat as a scanned PDF: pages are sent as images separately via image_urls.
+    # Do NOT feed the garbled text into the prompt — it misleads the agent.
+    reason = "too sparse" if (not text or len(text) <= MIN_CHARS_PER_PAGE) else "garbled/fragmented"
+    logger.info(f"PDF {filename} text is {reason}. Falling back to vision.")
     return "[This PDF appears to be scanned/image-based. The page images have been sent for visual analysis.]"
 
 
 def _is_scanned_pdf(pdf_bytes: bytes) -> bool:
-    """Check if a PDF is scanned (no extractable text)."""
+    """Check if a PDF needs vision (no usable extractable text).
+
+    Returns True when the text layer is missing/sparse OR when it is present
+    but garbled (a broken embedded OCR layer), so scanned tender tables with
+    junk text still get routed to vision.
+    """
     text = _extract_pdf_text(pdf_bytes)
-    return not text or len(text) < MIN_CHARS_PER_PAGE
+    return not _is_usable_pdf_text(text)
 
 
 def _extract_pdf_text(pdf_bytes: bytes) -> str:

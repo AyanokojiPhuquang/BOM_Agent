@@ -123,19 +123,34 @@ async def chat_completions(
 
     # Extract document content (PDF/Excel) and append to query
     if last_msg.images:
-        from src.app.utils.document_utils import extract_document_content, extract_pdf_as_images
+        from src.app.utils.document_utils import (
+            extract_document_content,
+            extract_scanned_pdf_markdown,
+        )
         doc_content = extract_document_content(last_msg.images)
         if doc_content:
             query = f"{query}\n\n--- Uploaded Document Content ---\n{doc_content}"
             logger.info("Extracted document content from uploaded file(s)")
 
-        # For scanned PDFs: add page images to vision
-        scanned_images = extract_pdf_as_images(last_msg.images)
-        if scanned_images:
+        # For scanned / garbled PDFs: OCR pages into clean Markdown with a
+        # dedicated strong vision model, then feed that text to the agent.
+        # This is far more reliable than a broken pdfplumber text layer and
+        # avoids depending on the main agent's own vision quality.
+        ocr_markdown, leftover_images = await extract_scanned_pdf_markdown(last_msg.images)
+        if ocr_markdown:
+            query = f"{query}\n\n--- Scanned Document (OCR) ---\n{ocr_markdown}"
+            logger.info(f"Added OCR Markdown for scanned PDF(s): {len(ocr_markdown)} chars")
+
+        # Fallback: if OCR failed for some scanned PDF, still send its page
+        # images to the agent's vision so it has a chance to read them.
+        if leftover_images:
             if image_urls is None:
                 image_urls = []
-            image_urls.extend(scanned_images)
-            logger.info(f"Added {len(scanned_images)} scanned PDF page(s) as images for vision")
+            image_urls.extend(leftover_images)
+            logger.info(
+                f"Added {len(leftover_images)} scanned PDF page(s) as images "
+                "for vision (OCR fallback)"
+            )
 
     if not request.stream:
         # --- Non-streaming ---

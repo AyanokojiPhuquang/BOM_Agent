@@ -14,6 +14,7 @@ from pathlib import Path
 from langchain_core.tools import tool
 from loguru import logger
 
+from src.agents.tools.utils.distance_utils import find_distance_conflict, format_meters
 from src.agents.tools.utils.email_templates import build_bom_email_body
 from src.agents.tools.utils.excel_renderer import render_bom_excel
 from src.agents.tools.schemas import (
@@ -125,6 +126,55 @@ async def _resolve_products(
         results.append(entry)
 
     return results
+
+
+def _find_distance_mismatch(resolved_items: list[dict]) -> list[dict] | None:
+    """Detect resolved items whose SKU distance conflicts with the request.
+
+    For each item resolved to a real Product, compare the distance the agent
+    put in ``notes``/``device_model`` against the SKU's ``max_distance``.
+    Returns a list describing the conflicting items, or None if all consistent.
+    """
+    conflicts: list[dict] = []
+
+    for item in resolved_items:
+        product: Product | None = item.get("product")
+        if not product or not product.max_distance:
+            continue
+
+        requested_text = " ".join(
+            part for part in (item.get("notes"), item.get("device_model")) if part
+        )
+        conflict = find_distance_conflict(requested_text, product.max_distance)
+        if conflict:
+            requested_m, sku_m = conflict
+            conflicts.append(
+                {
+                    "product_code": item["product_code"],
+                    "requested": format_meters(requested_m),
+                    "sku_distance": format_meters(sku_m),
+                }
+            )
+
+    return conflicts or None
+
+
+def _format_distance_mismatch(conflicts: list[dict]) -> str:
+    """Build an agent-facing message asking it to re-select the right variant."""
+    lines = [
+        "❌ **Không thể tạo BOM** — Mã sản phẩm không khớp khoảng cách yêu cầu:\n"
+    ]
+    for c in conflicts:
+        lines.append(
+            f"- `{c['product_code']}` là loại **{c['sku_distance']}**, "
+            f"nhưng yêu cầu là **{c['requested']}**."
+        )
+    lines.append(
+        "\nMã em chọn không đúng biến thể khoảng cách. Hãy tìm lại trong catalog "
+        "(dùng `grep`/`read_file`) đúng mã có khoảng cách khớp với yêu cầu "
+        "rồi gọi lại `generate_bom`. Tuyệt đối không tự suy hoặc đổi con số khoảng cách."
+    )
+    return "\n".join(lines)
 
 
 def _find_in_filesystem(code: str, datasheets_dir: Path) -> str | None:
@@ -421,6 +471,14 @@ async def generate_bom(
 
     # 1. Resolve product codes via database + filesystem fallback
     resolved_items = await _resolve_products(bom_input.items)
+
+    # Gate: guard against a distance-variant mismatch. The agent sometimes
+    # records the correct requested distance in `notes` but selects a SKU for
+    # a different distance variant (e.g. asks for 120km, picks a 40km SKU).
+    # Catch that here before generating the BOM and ask the agent to re-select.
+    distance_mismatch = _find_distance_mismatch(resolved_items)
+    if distance_mismatch:
+        return _format_distance_mismatch(distance_mismatch)
 
     # Check if ALL codes failed to resolve — still proceed but note the errors
     not_found = [r for r in resolved_items if r["error"] and "not found" in r["error"]]
